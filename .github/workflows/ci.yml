@@ -97,8 +97,8 @@ jobs:
       - name: Playwright browsers
         working-directory: frontend
         run: npx playwright install --with-deps
-      - name: Start stack (mock)
-        run: docker compose -f docker-compose.yml -f docker-compose.mock.yml up -d --build
+      - name: Start stack (mock, backend only)
+        run: docker compose -f docker-compose.yml -f docker-compose.mock.yml up -d --build postgres server worker
       - name: Wait for server
         run: |
           for i in $(seq 1 60); do
