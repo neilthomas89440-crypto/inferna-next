@@ -170,6 +170,7 @@ class InstanceManager:
             container = docker_client.containers.create(
                 image,
                 name=f"{CONTAINER_PREFIX}{instance_id}",
+                entrypoint=[],
                 device_requests=[
                     DeviceRequest(
                         device_ids=[str(i) for i in config.gpu_indexes],
