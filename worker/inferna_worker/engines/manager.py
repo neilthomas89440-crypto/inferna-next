@@ -39,6 +39,7 @@ class InstanceManager:
         self._instances: dict[str, dict[str, Any]] = {}
         self._probe_tasks: dict[str, asyncio.Task] = {}
         self._pending_probes: list[tuple[str, int]] = []
+        self._applying = False
 
     @property
     def docker(self) -> Any:
@@ -68,8 +69,8 @@ class InstanceManager:
     async def reconcile(
         self, commands: list[cluster_pb2.InstanceCommand]
     ) -> list[cluster_pb2.InstanceStatus]:
-        for command in commands:
-            if self.mock:
+        if self.mock:
+            for command in commands:
                 if command.action == "start":
                     await self._start_mock(command)
                 elif command.action == "stop":
@@ -78,15 +79,27 @@ class InstanceManager:
                         self._instances[command.instance_id]["detail"] = ""
                 elif command.action == "delete":
                     self._instances.pop(command.instance_id, None)
-                continue
-            # Blocking docker SDK calls (image pulls!) run in a thread so the
-            # Sync loop keeps the worker alive; the server marks workers
-            # disconnected after 30 s without a Sync.
-            await asyncio.to_thread(self._apply_docker_command, command)
-        if not self.mock:
-            await asyncio.to_thread(self._remove_stale_containers_sync)
-        self._schedule_pending_probes()
+            return self.statuses()
+        # Real mode: command application (image pulls!) can take minutes. Run
+        # it as a background task so the Sync loop keeps reporting and the
+        # server never marks the worker disconnected. One batch at a time:
+        # commands are recomputed from desired state each Sync, so a skipped
+        # duplicate is re-issued on the next cycle.
+        if not self._applying:
+            self._applying = True
+            asyncio.create_task(self._apply_batch(commands))
         return self.statuses()
+
+    async def _apply_batch(self, commands: list[cluster_pb2.InstanceCommand]) -> None:
+        try:
+            for command in commands:
+                await asyncio.to_thread(self._apply_docker_command, command)
+            await asyncio.to_thread(self._remove_stale_containers_sync)
+            self._schedule_pending_probes()
+        except Exception:  # noqa: BLE001
+            logger.exception("command batch failed")
+        finally:
+            self._applying = False
 
     def _apply_docker_command(self, command: cluster_pb2.InstanceCommand) -> None:
         if command.action == "start":
@@ -130,6 +143,11 @@ class InstanceManager:
     def _start_sync(self, command: cluster_pb2.InstanceCommand) -> None:
         instance_id = command.instance_id
         config = command.config
+        # Idempotency: a duplicate start command (re-issued while a previous
+        # batch is still applying) must not create a second container.
+        tracked = self._instances.get(instance_id)
+        if tracked is not None and tracked.get("state") in ("starting", "running", "stopped"):
+            return
         if config.requires_hf_token and not self.settings.hf_token:
             self._instances[instance_id] = {
                 "state": "error",
