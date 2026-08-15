@@ -1,7 +1,10 @@
 """Engine container reconciliation: pull/create/start/health-probe/stop/remove.
 
-Real mode drives Docker via the `docker` SDK; mock mode keeps an in-memory
-registry and never touches Docker.
+Real mode drives Docker via the `docker` SDK. Docker calls are blocking
+(image pulls can take minutes), so they run in a worker thread while the
+async Sync loop keeps the worker alive; the health probe runs as an asyncio
+task scheduled from the loop. Mock mode keeps an in-memory registry and never
+touches Docker.
 """
 
 from __future__ import annotations
@@ -35,6 +38,7 @@ class InstanceManager:
         # instance_id -> {"state", "port", "detail", "started_at"}
         self._instances: dict[str, dict[str, Any]] = {}
         self._probe_tasks: dict[str, asyncio.Task] = {}
+        self._pending_probes: list[tuple[str, int]] = []
 
     @property
     def docker(self) -> Any:
@@ -50,6 +54,9 @@ class InstanceManager:
         """Crash recovery: remove orphaned inferna-instance-* containers."""
         if self.mock:
             return
+        await asyncio.to_thread(self._startup_cleanup_sync)
+
+    def _startup_cleanup_sync(self) -> None:
         try:
             for container in self.docker.containers.list(all=True):
                 if container.name.startswith(CONTAINER_PREFIX):
@@ -62,20 +69,45 @@ class InstanceManager:
         self, commands: list[cluster_pb2.InstanceCommand]
     ) -> list[cluster_pb2.InstanceStatus]:
         for command in commands:
-            if command.action == "start":
-                await self._start(command)
-            elif command.action == "stop":
-                await self._stop(command.instance_id)
-            elif command.action == "delete":
-                await self._delete(command.instance_id)
-            else:
-                logger.warning("unknown command action", action=command.action)
-        await self._remove_stale_containers()
+            if self.mock:
+                if command.action == "start":
+                    await self._start_mock(command)
+                elif command.action == "stop":
+                    if command.instance_id in self._instances:
+                        self._instances[command.instance_id]["state"] = "stopped"
+                        self._instances[command.instance_id]["detail"] = ""
+                elif command.action == "delete":
+                    self._instances.pop(command.instance_id, None)
+                continue
+            # Blocking docker SDK calls (image pulls!) run in a thread so the
+            # Sync loop keeps the worker alive; the server marks workers
+            # disconnected after 30 s without a Sync.
+            await asyncio.to_thread(self._apply_docker_command, command)
+        if not self.mock:
+            await asyncio.to_thread(self._remove_stale_containers_sync)
+        self._schedule_pending_probes()
         return self.statuses()
 
-    # --- commands ---
+    def _apply_docker_command(self, command: cluster_pb2.InstanceCommand) -> None:
+        if command.action == "start":
+            self._start_sync(command)
+        elif command.action == "stop":
+            self._stop_sync(command.instance_id)
+        elif command.action == "delete":
+            self._delete_sync(command.instance_id)
+        else:
+            logger.warning("unknown command action", action=command.action)
 
-    async def _start(self, command: cluster_pb2.InstanceCommand) -> None:
+    def _schedule_pending_probes(self) -> None:
+        for instance_id, port in self._pending_probes:
+            self._probe_tasks[instance_id] = asyncio.create_task(
+                self._health_probe(instance_id, port)
+            )
+        self._pending_probes.clear()
+
+    # --- commands (mock) ---
+
+    async def _start_mock(self, command: cluster_pb2.InstanceCommand) -> None:
         instance_id = command.instance_id
         config = command.config
         if config.requires_hf_token and not self.settings.hf_token:
@@ -86,11 +118,23 @@ class InstanceManager:
                 "started_at": time.monotonic(),
             }
             return
-        if self.mock:
+        self._instances[instance_id] = {
+            "state": "starting",
+            "port": config.port,
+            "detail": "",
+            "started_at": time.monotonic(),
+        }
+
+    # --- commands (real, run in a thread) ---
+
+    def _start_sync(self, command: cluster_pb2.InstanceCommand) -> None:
+        instance_id = command.instance_id
+        config = command.config
+        if config.requires_hf_token and not self.settings.hf_token:
             self._instances[instance_id] = {
-                "state": "starting",
+                "state": "error",
                 "port": config.port,
-                "detail": "",
+                "detail": "model requires HF token",
                 "started_at": time.monotonic(),
             }
             return
@@ -130,9 +174,7 @@ class InstanceManager:
                 "detail": "",
                 "started_at": time.monotonic(),
             }
-            self._probe_tasks[instance_id] = asyncio.create_task(
-                self._health_probe(instance_id, config.port)
-            )
+            self._pending_probes.append((instance_id, config.port))
             logger.info("instance started", instance_id=instance_id, port=config.port)
         except Exception as exc:  # noqa: BLE001
             self._instances[instance_id] = {
@@ -143,12 +185,7 @@ class InstanceManager:
             }
             logger.warning("instance start failed", instance_id=instance_id, error=str(exc))
 
-    async def _stop(self, instance_id: str) -> None:
-        if self.mock:
-            if instance_id in self._instances:
-                self._instances[instance_id]["state"] = "stopped"
-                self._instances[instance_id]["detail"] = ""
-            return
+    def _stop_sync(self, instance_id: str) -> None:
         probe = self._probe_tasks.pop(instance_id, None)
         if probe is not None:
             probe.cancel()
@@ -161,13 +198,10 @@ class InstanceManager:
             self._instances[instance_id]["state"] = "stopped"
             self._instances[instance_id]["detail"] = ""
 
-    async def _delete(self, instance_id: str) -> None:
+    def _delete_sync(self, instance_id: str) -> None:
         probe = self._probe_tasks.pop(instance_id, None)
         if probe is not None:
             probe.cancel()
-        if self.mock:
-            self._instances.pop(instance_id, None)
-            return
         try:
             container = self.docker.containers.get(f"{CONTAINER_PREFIX}{instance_id}")
             container.remove(force=True)
@@ -175,10 +209,8 @@ class InstanceManager:
             pass
         self._instances.pop(instance_id, None)
 
-    async def _remove_stale_containers(self) -> None:
-        """Real mode: remove tracked-set leftovers (server-side deletes covered)."""
-        if self.mock:
-            return
+    def _remove_stale_containers_sync(self) -> None:
+        """Remove tracked-set leftovers (server-side deletes covered)."""
         try:
             for container in self.docker.containers.list(all=True):
                 if not container.name.startswith(CONTAINER_PREFIX):
@@ -212,7 +244,9 @@ class InstanceManager:
         info = self._instances.get(instance_id)
         if info is not None:
             info["state"] = "error"
-            info["detail"] = self._container_log_tail(instance_id) or "health probe timed out"
+            info["detail"] = (
+                await asyncio.to_thread(self._container_log_tail, instance_id)
+            ) or "health probe timed out"
 
     def _container_log_tail(self, instance_id: str) -> str:
         if self.mock:

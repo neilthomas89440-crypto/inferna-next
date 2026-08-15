@@ -64,11 +64,15 @@ def detect_nvidia() -> list[GPUInfo]:
         count = pynvml.nvmlDeviceGetCount()
         if count == 0:
             raise RuntimeError("no NVIDIA devices")
-        driver_version = pynvml.nvmlSystemGetDriverVersion().decode()
+
+        def _to_str(value) -> str:
+            return value.decode() if isinstance(value, bytes) else str(value)
+
+        driver_version = _to_str(pynvml.nvmlSystemGetDriverVersion())
         gpus: list[GPUInfo] = []
         for index in range(count):
             handle = pynvml.nvmlDeviceGetHandleByIndex(index)
-            name = pynvml.nvmlDeviceGetName(handle).decode()
+            name = _to_str(pynvml.nvmlDeviceGetName(handle))
             memory = pynvml.nvmlDeviceGetMemoryInfo(handle)
             utilization = pynvml.nvmlDeviceGetUtilizationRates(handle)
             gpus.append(
@@ -79,7 +83,7 @@ def detect_nvidia() -> list[GPUInfo]:
                     vram_mb=int(memory.total) // (1024 * 1024),
                     used_vram_mb=int(memory.used) // (1024 * 1024),
                     utilization_pct=int(utilization.gpu),
-                    uuid=pynvml.nvmlDeviceGetUUID(handle).decode(),
+                    uuid=_to_str(pynvml.nvmlDeviceGetUUID(handle)),
                     driver_version=driver_version,
                 )
             )

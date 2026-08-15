@@ -123,7 +123,5 @@ def test_stale_container_sweep_removes_untracked() -> None:
     stale = FakeContainer(f"{CONTAINER_PREFIX}ghost")
     manager = InstanceManager(Settings(mock_engine=False), docker_client=FakeDocker([stale]))
 
-    import asyncio
-
-    asyncio.run(manager._remove_stale_containers())
+    manager._remove_stale_containers_sync()
     assert stale.removed is True
