@@ -1,0 +1,59 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: inferna
+      POSTGRES_PASSWORD: inferna
+      POSTGRES_DB: inferna
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U inferna"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  server:
+    build: ./server
+    ports:
+      - "8000:8000"
+      - "9091:9091"
+    environment:
+      INFERNA_DATABASE_URL: postgresql+asyncpg://inferna:inferna@postgres:5432/inferna
+      INFERNA_JWT_SECRET: ${INFERNA_JWT_SECRET:-inferna-dev-secret}
+      INFERNA_REGISTRATION_TOKEN: ${INFERNA_REGISTRATION_TOKEN:-inferna-registration-token}
+      INFERNA_ADMIN_PASSWORD: ${INFERNA_ADMIN_PASSWORD:-inferna}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  worker:
+    build: ./worker
+    environment:
+      INFERNA_SERVER_URL: server:9091
+      INFERNA_REGISTRATION_TOKEN: ${INFERNA_REGISTRATION_TOKEN:-inferna-registration-token}
+      INFERNA_MODELS_DIR: /models
+      INFERNA_HF_TOKEN: ${INFERNA_HF_TOKEN:-}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - inferna-models:/models
+    depends_on:
+      server:
+        condition: service_healthy
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      server:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  inferna-models:

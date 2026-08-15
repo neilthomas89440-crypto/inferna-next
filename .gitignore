@@ -1,0 +1,34 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.pyright/
+
+# Node
+node_modules/
+dist/
+
+# Env / secrets
+.env
+
+# Databases
+*.db
+*.sqlite3
+
+# Test artifacts
+coverage/
+playwright-report/
+test-results/
+
+# Models
+models/
+
+# Editors
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

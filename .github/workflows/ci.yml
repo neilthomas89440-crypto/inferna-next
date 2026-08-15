@@ -1,0 +1,116 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    name: backend (${{ matrix.dir }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        dir: [server, worker]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v5
+      - name: Sync deps
+        working-directory: ${{ matrix.dir }}
+        run: uv sync --dev
+      - name: Ruff
+        working-directory: ${{ matrix.dir }}
+        run: uv run ruff check .
+      - name: Pyright (warn-only)
+        working-directory: ${{ matrix.dir }}
+        continue-on-error: true
+        run: uv run pyright
+      - name: Pytest
+        working-directory: ${{ matrix.dir }}
+        run: uv run pytest
+
+  proto-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v5
+      - name: Sync server deps (grpc-tools)
+        working-directory: server
+        run: uv sync --dev
+      - name: Regenerate stubs
+        run: bash scripts/gen-proto.sh
+      - name: Stubs must be committed
+        run: git diff --exit-code
+
+  openapi-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v5
+      - name: Sync server deps
+        working-directory: server
+        run: uv sync --dev
+      - name: Spec must be current
+        working-directory: server
+        run: uv run python ../scripts/export-openapi.py --check
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Install
+        working-directory: frontend
+        run: npm ci
+      - name: Lint
+        working-directory: frontend
+        run: npm run lint
+      - name: Type check
+        working-directory: frontend
+        run: npx tsc --noEmit
+      - name: Unit tests
+        working-directory: frontend
+        run: npx vitest run
+
+  e2e:
+    runs-on: ubuntu-latest
+    needs: [backend, frontend]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Install
+        working-directory: frontend
+        run: npm ci
+      - name: Playwright browsers
+        working-directory: frontend
+        run: npx playwright install --with-deps
+      - name: Start stack (mock)
+        run: docker compose -f docker-compose.yml -f docker-compose.mock.yml up -d --build
+      - name: Wait for server
+        run: |
+          for i in $(seq 1 60); do
+            curl -fsS http://localhost:8000/healthz && exit 0
+            sleep 5
+          done
+          exit 1
+      - name: Build frontend (API base override)
+        working-directory: frontend
+        env:
+          VITE_API_BASE: http://localhost:8000/api/v1
+        run: npm run build
+      - name: E2E
+        working-directory: frontend
+        run: npx playwright test

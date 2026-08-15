@@ -1,0 +1,5 @@
+# Demo override: run the worker in mock mode (no GPU, no docker engine calls).
+services:
+  worker:
+    environment:
+      INFERNA_MOCK_ENGINE: "true"
