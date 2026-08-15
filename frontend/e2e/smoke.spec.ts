@@ -10,10 +10,11 @@ async function login(page: Page) {
 
 test("dashboard stats render", async ({ page }) => {
   await login(page);
-  await expect(page.getByText("Clusters")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible();
   await expect(page.getByText("Workers online")).toBeVisible();
   await expect(page.getByText("GPUs total")).toBeVisible();
   await expect(page.getByText("Instances running")).toBeVisible();
+  await expect(page.getByText("Recent instances")).toBeVisible();
 });
 
 test("models page lists catalog and deploy dialog cancels", async ({ page }) => {

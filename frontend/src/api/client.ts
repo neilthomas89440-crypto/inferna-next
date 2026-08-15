@@ -35,14 +35,6 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
 
   const response = await fetch(`${BASE_URL}${path}`, { ...options, headers });
 
-  if (response.status === 401) {
-    setAccessToken(null);
-    if (window.location.pathname !== "/login") {
-      window.location.assign("/login");
-    }
-    throw new ApiError(401, "Unauthorized");
-  }
-
   if (!response.ok) {
     let detail = response.statusText;
     try {
@@ -61,6 +53,12 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
       }
     } catch {
       // keep statusText fallback
+    }
+    if (response.status === 401) {
+      setAccessToken(null);
+      if (window.location.pathname !== "/login") {
+        window.location.assign("/login");
+      }
     }
     throw new ApiError(response.status, detail);
   }
