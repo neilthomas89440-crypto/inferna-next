@@ -15,6 +15,7 @@ from typing import Any
 
 import httpx
 import structlog
+from docker.types import DeviceRequest
 
 from inferna_worker.config import Settings
 from inferna_worker.engines.base import build_command, image_for
@@ -157,20 +158,20 @@ class InstanceManager:
             }
             return
         try:
-            docker = self.docker
+            docker_client = self.docker
             image = image_for(config.engine, self.settings)
             if image not in self._pulled_images:
                 logger.info("pulling engine image", image=image)
-                docker.images.pull(image)
+                docker_client.images.pull(image)
                 self._pulled_images.add(image)
             environment = {}
             if self.settings.hf_token:
                 environment["HF_HUB_TOKEN"] = self.settings.hf_token
-            container = docker.containers.create(
+            container = docker_client.containers.create(
                 image,
                 name=f"{CONTAINER_PREFIX}{instance_id}",
                 device_requests=[
-                    docker.types.DeviceRequest(
+                    DeviceRequest(
                         device_ids=[str(i) for i in config.gpu_indexes],
                         capabilities=[["gpu"]],
                     )
