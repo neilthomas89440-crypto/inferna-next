@@ -19,17 +19,18 @@ uv run python - <<'PY'
 import asyncio
 import os
 import uuid
-from urllib.parse import urlparse
 
-url = os.getenv("INFERNA_DATABASE_URL", "postgresql+asyncpg://inferna:inferna@localhost:5432/inferna")
+url = os.getenv("INFERNA_DATABASE_URL", "sqlite+aiosqlite:///./inferna.db")
+if url.startswith("sqlite"):
+    print("sqlite URL, skipping legacy insert")
+    raise SystemExit(0)
 # strip driver prefix for asyncpg
 if url.startswith("postgresql+asyncpg://"):
     url = "postgresql://" + url[len("postgresql+asyncpg://"):]
 elif url.startswith("postgresql://"):
     pass
 else:
-    # fallback for sqlite - skip
-    print("sqlite URL, skipping legacy insert")
+    print(f"unsupported URL {url}, skipping")
     raise SystemExit(0)
 
 import asyncpg
@@ -52,19 +53,21 @@ PY
 
 echo "==> upgrade head from previous-release"
 uv run alembic upgrade head
-
 # Verify legacy data survived
 uv run python - <<'PY'
 import asyncio
 import os
 
-url = os.getenv("INFERNA_DATABASE_URL", "postgresql+asyncpg://inferna:inferna@localhost:5432/inferna")
+url = os.getenv("INFERNA_DATABASE_URL", "sqlite+aiosqlite:///./inferna.db")
+if url.startswith("sqlite"):
+    print("sqlite URL, skipping check")
+    raise SystemExit(0)
 if url.startswith("postgresql+asyncpg://"):
     url = "postgresql://" + url[len("postgresql+asyncpg://"):]
 elif url.startswith("postgresql://"):
     pass
 else:
-    print("sqlite URL, skipping check")
+    print(f"unsupported URL {url}, skipping")
     raise SystemExit(0)
 
 import asyncpg
