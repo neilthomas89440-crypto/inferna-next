@@ -259,13 +259,17 @@ async def seed_catalog(db: AsyncSession) -> None:
     """Upsert builtin catalog entries from fixtures/catalog.json (mark is_builtin)."""
     catalog = json.loads((FIXTURES_DIR / "catalog.json").read_text(encoding="utf-8"))
     for entry in catalog["models"]:
+        # Map catalog field "engines" -> DB column "supported_engines"
+        entry_mapped = dict(entry)
+        if "engines" in entry_mapped:
+            entry_mapped["supported_engines"] = entry_mapped.pop("engines")
         row = (
-            await db.execute(select(Model).where(Model.name == entry["name"]))
+            await db.execute(select(Model).where(Model.name == entry_mapped["name"]))
         ).scalar_one_or_none()
         if row is None:
-            db.add(Model(**entry, is_builtin=True))
+            db.add(Model(**entry_mapped, is_builtin=True))
         else:
-            for key, value in entry.items():
+            for key, value in entry_mapped.items():
                 setattr(row, key, value)
             row.is_builtin = True
     await db.flush()

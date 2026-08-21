@@ -117,6 +117,7 @@ class ModelOut(ORMModel):
     requires_hf_token: bool
     license: str | None
     is_builtin: bool
+    supported_engines: list[str] = []
 
 
 # --- instances ---

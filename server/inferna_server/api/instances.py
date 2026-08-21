@@ -49,6 +49,10 @@ async def deploy(
     cluster = await db.get(Cluster, body.cluster_id)
     if cluster is None:
         raise HTTPException(status_code=404, detail="cluster not found")
+    if body.engine not in (model.supported_engines or []):
+        raise HTTPException(
+            status_code=400, detail=f"engine '{body.engine}' does not support category '{model.category}'"
+        )
 
     if isinstance(body.gpu_selection, ManualGpuSelection):
         worker, gpu_indexes, port = await allocate_manual(
