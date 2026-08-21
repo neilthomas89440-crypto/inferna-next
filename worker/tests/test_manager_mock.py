@@ -12,11 +12,12 @@ MOCK_SETTINGS = Settings(mock_engine=True)
 
 
 def _start_command(
-    instance_id: str = "abc", requires_hf_token: bool = False
+    instance_id: str = "abc", requires_hf_token: bool = False, generation: int = 1
 ) -> cluster_pb2.InstanceCommand:
     return cluster_pb2.InstanceCommand(
         instance_id=instance_id,
         action="start",
+        generation=generation,
         config=cluster_pb2.EngineConfig(
             engine="vllm",
             model_name="Qwen/Qwen2.5-0.5B-Instruct",
@@ -84,26 +85,62 @@ async def test_mock_hf_token_present_allows_start() -> None:
 
 
 class FakeContainer:
-    def __init__(self, name: str) -> None:
+    def __init__(self, name: str, labels: dict | None = None, status: str = "running") -> None:
         self.name = name
+        self.labels = labels or {}
+        self.status = status
         self.removed = False
 
     def remove(self, force: bool = False) -> None:  # noqa: ARG002
         self.removed = True
+
+    def stop(self, timeout: int = 10) -> None:  # noqa: ARG002
+        self.status = "exited"
+
+    def start(self) -> None:
+        self.status = "running"
+
+    def logs(self, tail: int = 20) -> bytes:  # noqa: ARG002
+        return b"fake log"
+
+
+class FakeDockerImages:
+    def pull(self, image: str) -> None:  # noqa: ARG002
+        return None
 
 
 class FakeDockerContainers:
     def __init__(self, containers: list[FakeContainer]) -> None:
         self.containers = containers
 
-    def list(self, all: bool = False):  # noqa: A002, ARG002
+    def list(self, all: bool = False, filters: dict | None = None):  # noqa: A002, ARG002
+        if filters and "label" in filters:
+            label_filter = filters["label"]
+            # format "inferna.managed=true"
+            if "=" in label_filter:
+                k, v = label_filter.split("=", 1)
+                return [c for c in self.containers if c.labels.get(k) == v]
+            return [c for c in self.containers if label_filter in c.labels]
         return self.containers
+
+    def get(self, name: str) -> FakeContainer:
+        for c in self.containers:
+            if c.name == name:
+                return c
+        raise Exception(f"container {name} not found")
+
+    def create(self, image, name, **kwargs):  # noqa: ARG002
+        labels = kwargs.get("labels", {})
+        c = FakeContainer(name, labels=labels, status="created")
+        self.containers.append(c)
+        # mimic docker create returns container with start method
+        return c
 
 
 class FakeDocker:
     def __init__(self, containers: list[FakeContainer]) -> None:
         self.containers = FakeDockerContainers(containers)
-
+        self.images = FakeDockerImages()
 
 def test_startup_cleanup_removes_orphans() -> None:
     orphan = FakeContainer(f"{CONTAINER_PREFIX}dead")
@@ -120,7 +157,7 @@ def test_startup_cleanup_removes_orphans() -> None:
 
 
 def test_stale_container_sweep_removes_untracked() -> None:
-    stale = FakeContainer(f"{CONTAINER_PREFIX}ghost")
+    stale = FakeContainer(f"{CONTAINER_PREFIX}ghost", labels={"inferna.managed": "true"})
     manager = InstanceManager(Settings(mock_engine=False), docker_client=FakeDocker([stale]))
 
     manager._remove_stale_containers_sync()
