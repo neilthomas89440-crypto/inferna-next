@@ -197,9 +197,7 @@ async def sync_worker(
             known = {str(r.id): r for r in rows}
     for status in request.instances:
         inst = known.get(status.instance_id)
-        if inst is None or inst.state == "stopped":
-            # Deleted instance, or user requested stop (worker not authoritative
-            # for desired state; it reconciles by executing the stop command).
+        if inst is None:
             continue
         inst.state = status.state
         inst.error_detail = status.detail or None
@@ -208,40 +206,47 @@ async def sync_worker(
 
     # --- build commands from desired state ---
     commands: list[cluster_pb2.InstanceCommand] = []
-    desired = (
+    # Load all instances assigned to this worker
+    all_instances = (
         (
             await db.execute(
                 select(ModelInstance)
                 .options(selectinload(ModelInstance.model))
-                .where(
-                    ModelInstance.worker_id == worker.id,
-                    ModelInstance.state.in_(("scheduled", "stopped")),
-                )
+                .where(ModelInstance.worker_id == worker.id)
             )
         )
         .scalars()
         .all()
     )
-    reported_state = {s.instance_id: s.state for s in request.instances}
-    for inst in desired:
-        if inst.state == "scheduled":
-            config = cluster_pb2.EngineConfig(
-                engine=inst.engine,
-                model_name=inst.model.name,
-                profile=inst.profile,
-                gpu_indexes=inst.gpu_indexes,
-                vram_required_mb=inst.model.vram_required_mb,
-                port=inst.port or 0,
-                requires_hf_token=inst.model.requires_hf_token,
-            )
-            commands.append(
-                cluster_pb2.InstanceCommand(instance_id=str(inst.id), action="start", config=config)
-            )
-        elif inst.state == "stopped" and reported_state.get(str(inst.id)) in (
-            "running",
-            "starting",
-        ):
-            commands.append(cluster_pb2.InstanceCommand(instance_id=str(inst.id), action="stop"))
+    reported: dict[str, cluster_pb2.InstanceStatus] = {s.instance_id: s for s in request.instances}
+    for inst in all_instances:
+        rep = reported.get(str(inst.id))
+        if inst.desired_state == "running":
+            applied = rep.generation if rep is not None else 0
+            obs = rep.state if rep is not None else "stopped"
+            if applied < inst.generation or obs == "stopped":
+                config = cluster_pb2.EngineConfig(
+                    engine=inst.engine,
+                    model_name=inst.model.name,
+                    profile=inst.profile,
+                    gpu_indexes=inst.gpu_indexes,
+                    vram_required_mb=inst.model.vram_required_mb,
+                    port=inst.port or 0,
+                    requires_hf_token=inst.model.requires_hf_token,
+                )
+                commands.append(
+                    cluster_pb2.InstanceCommand(
+                        instance_id=str(inst.id),
+                        action="start",
+                        generation=inst.generation,
+                        config=config,
+                    )
+                )
+        elif inst.desired_state == "stopped":
+            if rep is not None and rep.state in ("starting", "running"):
+                commands.append(
+                    cluster_pb2.InstanceCommand(instance_id=str(inst.id), action="stop")
+                )
 
     # Instances the worker runs but that no longer exist in the DB → remove.
     known_ids = set(known)
@@ -294,6 +299,7 @@ async def mark_disconnected(db: AsyncSession) -> None:
                 await db.execute(
                     select(ModelInstance).where(
                         ModelInstance.worker_id == worker.id,
+                        ModelInstance.desired_state == "running",
                         ModelInstance.state.in_(LIVE_STATES),
                     )
                 )

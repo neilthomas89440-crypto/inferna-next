@@ -80,6 +80,8 @@ class InstanceOut(ORMModel):
     profile: str
     gpu_indexes: list[int]
     state: str
+    desired_state: str
+    generation: int
     port: int | None
     error_detail: str | None
     created_at: datetime

@@ -108,10 +108,40 @@ async def stop_instance(
     ).scalar_one_or_none()
     if instance is None:
         raise HTTPException(status_code=404, detail="instance not found")
-    if instance.state in ("scheduled", "starting", "running"):
-        instance.state = "stopped"
+    if instance.desired_state != "stopped":
+        instance.desired_state = "stopped"
+        instance.generation += 1
         instance.error_detail = None
         await db.commit()
+        await db.refresh(instance)
+    if instance.worker is not None:
+        instance.worker_name = instance.worker.name
+    return instance
+
+
+@router.post("/{instance_id}/restart", response_model=InstanceOut)
+async def restart_instance(
+    instance_id: uuid.UUID,
+    _: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ModelInstance:
+    instance = (
+        await db.execute(
+            select(ModelInstance)
+            .options(
+                selectinload(ModelInstance.worker),
+                selectinload(ModelInstance.model),
+            )
+            .where(ModelInstance.id == instance_id)
+        )
+    ).scalar_one_or_none()
+    if instance is None:
+        raise HTTPException(status_code=404, detail="instance not found")
+    instance.desired_state = "running"
+    instance.generation += 1
+    instance.error_detail = None
+    await db.commit()
+    await db.refresh(instance)
     if instance.worker is not None:
         instance.worker_name = instance.worker.name
     return instance
