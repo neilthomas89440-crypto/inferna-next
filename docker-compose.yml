@@ -19,6 +19,7 @@ services:
       - "8000:8000"
       - "9091:9091"
     environment:
+      INFERNA_ENV: ${INFERNA_ENV:-development}
       INFERNA_DATABASE_URL: postgresql+asyncpg://inferna:inferna@postgres:5432/inferna
       INFERNA_JWT_SECRET: ${INFERNA_JWT_SECRET:-inferna-dev-secret}
       INFERNA_REGISTRATION_TOKEN: ${INFERNA_REGISTRATION_TOKEN:-inferna-registration-token}
@@ -35,6 +36,7 @@ services:
   worker:
     build: ./worker
     environment:
+      INFERNA_ENV: ${INFERNA_ENV:-development}
       INFERNA_SERVER_URL: server:9091
       INFERNA_REGISTRATION_TOKEN: ${INFERNA_REGISTRATION_TOKEN:-inferna-registration-token}
       INFERNA_MODELS_DIR: /models

@@ -25,7 +25,7 @@ class WorkerService(cluster_pb2_grpc.WorkerServiceServicer):
             await context.abort(exc.code(), exc.details() or "register failed")
         except Exception as exc:  # noqa: BLE001
             logger.exception("register failed")
-            await context.abort(grpc.StatusCode.INTERNAL, str(exc))
+            await context.abort(grpc.StatusCode.INTERNAL, "internal error")
 
     async def Sync(self, request, context):  # type: ignore[override]
         try:
@@ -37,8 +37,7 @@ class WorkerService(cluster_pb2_grpc.WorkerServiceServicer):
             await context.abort(exc.code(), exc.details() or "sync failed")
         except Exception as exc:  # noqa: BLE001
             logger.exception("sync failed")
-            await context.abort(grpc.StatusCode.INTERNAL, str(exc))
-
+            await context.abort(grpc.StatusCode.INTERNAL, "internal error")
 
 async def disconnect_watchdog() -> None:
     while True:

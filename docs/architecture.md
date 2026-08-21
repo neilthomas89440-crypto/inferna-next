@@ -74,6 +74,11 @@ Disconnect handling: a server background task marks workers with `last_seen_at` 
 - Worker gRPC auth: cluster token on Register, per-worker token on Sync (SHA-256 hash stored).
 - `INFERNA_AUTH_ENABLED=false` disables auth for dev (all requests act as admin).
 
+### Network boundary
+
+- `9091` (gRPC) and `8010–8100` (instance ports) are only reachable from the private network. `8000` (REST API) sits behind a reverse proxy that terminates TLS; workers dial towards the server, not the other way round.
+- `docker-compose.yml` is a **dev/demo artifact**: it publishes `9091` on all interfaces so a worker outside the compose network (e.g. an NVIDIA node on another host) can reach it. In production the server host **must** close `9091` with a firewall/security-group rule — verified by scenario 0 of `docs/phase0-validation.md`.
+- No TLS/mTLS is implemented in this phase; the private-network boundary is the documented security perimeter.
 ## Directory layout
 
 ```
