@@ -69,20 +69,10 @@ def upgrade() -> None:
     conn = op.get_bind()
     dialect = conn.dialect.name
 
-    # 1. model_instances: desired_state, generation, backfill, index, checks
+    # 1. model_instances: desired_state, generation, backfill, checks (index deferred until after worker dedup)
     op.add_column('model_instances', sa.Column('desired_state', sa.String(length=16), nullable=False, server_default='running'))
     op.add_column('model_instances', sa.Column('generation', sa.Integer(), nullable=False, server_default='1'))
     op.execute(sa.text("UPDATE model_instances SET desired_state='stopped' WHERE state='stopped'"))
-    # partial unique index: port reserved when desired running OR state in LIVE_STATES
-    where_expr = sa.text("desired_state = 'running' OR state IN ('scheduled','starting','running')")
-    op.create_index(
-        'uq_model_instances_worker_port_active',
-        'model_instances',
-        ['worker_id', 'port'],
-        unique=True,
-        postgresql_where=where_expr,
-        sqlite_where=where_expr,
-    )
     _add_check('model_instances', 'ck_model_instances_state', "state IN ('scheduled','starting','running','stopped','error')")
     _add_check('model_instances', 'ck_model_instances_desired_state', "desired_state IN ('running','stopped')")
     _add_check('model_instances', 'ck_model_instances_engine', "engine IN ('vllm','sglang')")
@@ -92,10 +82,10 @@ def upgrade() -> None:
     _add_unique('worker_gpus', 'uq_worker_gpus_worker_index', ['worker_id', 'index'])
     _add_check('worker_gpus', 'ck_worker_gpus_vendor', "vendor IN ('nvidia','amd','mock')")
 
-    # 3. workers: state check, dedup, orphan check, unique constraints
+    # 3. workers: state check, dedup (collision-safe), orphan check, unique constraints
     _add_check('workers', 'ck_workers_state', "state IN ('connected','disconnected')")
 
-    # Deduplicate (cluster_id, hostname)
+    # Deduplicate (cluster_id, hostname) — collision-safe for active worker-port index
     dup_host_rows = list(conn.execute(sa.text("SELECT cluster_id, hostname FROM workers GROUP BY cluster_id, hostname HAVING COUNT(*) > 1")).mappings())
     for grp in dup_host_rows:
         cid = grp['cluster_id']
@@ -115,6 +105,24 @@ def upgrade() -> None:
         kept = rows[0]['id']
         for dup in rows[1:]:
             dup_id = dup['id']
+            # Collision-safe reassignment: if kept worker already has an active instance on the same port,
+            # the unconditional UPDATE would violate the upcoming partial unique index.
+            # Null out the colliding dup instance's port (and mark error) so it no longer counts as active.
+            # Active = desired_state='running' OR state IN ('scheduled','starting','running')
+            dup_active = list(conn.execute(
+                sa.text("SELECT id, port FROM model_instances WHERE worker_id = :dup AND (desired_state = 'running' OR state IN ('scheduled','starting','running')) AND port IS NOT NULL"),
+                {"dup": dup_id},
+            ).mappings())
+            for inst in dup_active:
+                colliding = conn.execute(
+                    sa.text("SELECT 1 FROM model_instances WHERE worker_id = :kept AND port = :port AND (desired_state = 'running' OR state IN ('scheduled','starting','running'))"),
+                    {"kept": kept, "port": inst['port']},
+                ).fetchone()
+                if colliding:
+                    conn.execute(
+                        sa.text("UPDATE model_instances SET port = NULL, state = 'error', error_detail = 'worker dedup port collision', desired_state = 'stopped' WHERE id = :iid"),
+                        {"iid": inst['id']},
+                    )
             conn.execute(sa.text("UPDATE model_instances SET worker_id = :kept WHERE worker_id = :dup"), {"kept": kept, "dup": dup_id})
             conn.execute(sa.text("DELETE FROM workers WHERE id = :dup"), {"dup": dup_id})
 
@@ -138,6 +146,20 @@ def upgrade() -> None:
         kept = rows[0]['id']
         for dup in rows[1:]:
             dup_id = dup['id']
+            dup_active = list(conn.execute(
+                sa.text("SELECT id, port FROM model_instances WHERE worker_id = :dup AND (desired_state = 'running' OR state IN ('scheduled','starting','running')) AND port IS NOT NULL"),
+                {"dup": dup_id},
+            ).mappings())
+            for inst in dup_active:
+                colliding = conn.execute(
+                    sa.text("SELECT 1 FROM model_instances WHERE worker_id = :kept AND port = :port AND (desired_state = 'running' OR state IN ('scheduled','starting','running'))"),
+                    {"kept": kept, "port": inst['port']},
+                ).fetchone()
+                if colliding:
+                    conn.execute(
+                        sa.text("UPDATE model_instances SET port = NULL, state = 'error', error_detail = 'worker dedup port collision', desired_state = 'stopped' WHERE id = :iid"),
+                        {"iid": inst['id']},
+                    )
             conn.execute(sa.text("UPDATE model_instances SET worker_id = :kept WHERE worker_id = :dup"), {"kept": kept, "dup": dup_id})
             conn.execute(sa.text("DELETE FROM workers WHERE id = :dup"), {"dup": dup_id})
 
@@ -146,8 +168,20 @@ def upgrade() -> None:
     if orphan_count and int(orphan_count) != 0:
         raise RuntimeError(f"orphaned model_instances.worker_id references after dedup: {orphan_count}")
 
+    # Now create the active port unique index (deferred to avoid collision during reassignment)
+    where_expr = sa.text("desired_state = 'running' OR state IN ('scheduled','starting','running')")
+    op.create_index(
+        'uq_model_instances_worker_port_active',
+        'model_instances',
+        ['worker_id', 'port'],
+        unique=True,
+        postgresql_where=where_expr,
+        sqlite_where=where_expr,
+    )
+
     _add_unique('workers', 'uq_workers_cluster_hostname', ['cluster_id', 'hostname'])
     _add_unique('workers', 'uq_workers_cluster_name', ['cluster_id', 'name'])
+
 
     # 4. models: supported_engines + category check
     op.add_column('models', sa.Column('supported_engines', sa.JSON(), nullable=False, server_default='[]'))

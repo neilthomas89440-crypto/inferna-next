@@ -251,7 +251,7 @@ async def sync_worker(
     # Instances the worker runs but that no longer exist in the DB → remove.
     known_ids = set(known)
     for status in request.instances:
-        if status.state in ("running", "starting") and status.instance_id not in known_ids:
+        if status.instance_id not in known_ids:
             commands.append(
                 cluster_pb2.InstanceCommand(instance_id=status.instance_id, action="delete")
             )
