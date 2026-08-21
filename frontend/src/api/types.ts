@@ -43,8 +43,8 @@ export interface ModelInfo {
   requires_hf_token: boolean;
   license: string | null;
   is_builtin: boolean;
+  supported_engines: Engine[];
 }
-
 export interface Instance {
   id: string;
   model_id: string;
@@ -54,6 +54,8 @@ export interface Instance {
   profile: Profile;
   gpu_indexes: number[];
   state: InstanceState;
+  desired_state: "running" | "stopped";
+  generation: number;
   port: number | null;
   error_detail: string | null;
   created_at: string;

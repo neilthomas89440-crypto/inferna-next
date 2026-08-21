@@ -125,6 +125,25 @@ export function useStopInstance() {
   });
 }
 
+export function useRestartInstance() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api<Instance>(`/model-instances/${id}/restart`, { method: "POST" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["instances"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+    },
+  });
+}
+
+export function useCompatibility() {
+  return useQuery({
+    queryKey: ["compatibility"],
+    queryFn: () => api<{ engine_vendors: Record<string, string[]> }>("/compatibility"),
+    refetchInterval: 60000,
+  });
+}
+
 export function useDeleteInstance() {
   const queryClient = useQueryClient();
   return useMutation({

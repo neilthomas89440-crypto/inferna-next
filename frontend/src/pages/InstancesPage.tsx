@@ -2,6 +2,7 @@ import { useState } from "react";
 import {
   useDeleteInstance,
   useInstances,
+  useRestartInstance,
   useStopInstance,
 } from "../api/hooks";
 import ConfirmDialog from "../components/ConfirmDialog";
@@ -10,6 +11,7 @@ import StateBadge from "../components/StateBadge";
 export default function InstancesPage() {
   const instances = useInstances();
   const stopInstance = useStopInstance();
+  const restartInstance = useRestartInstance();
   const deleteInstance = useDeleteInstance();
   const [deleting, setDeleting] = useState<string | null>(null);
 
@@ -71,7 +73,7 @@ export default function InstancesPage() {
                   )}
                 </td>
                 <td className="px-4 py-2 text-right">
-                  {inst.state !== "stopped" && (
+                  {inst.desired_state !== "stopped" && inst.state !== "stopped" && (
                     <button
                       type="button"
                       disabled={stopInstance.isPending}
@@ -79,6 +81,36 @@ export default function InstancesPage() {
                       className="mr-3 text-sm text-slate-600 hover:underline disabled:opacity-50"
                     >
                       Stop
+                    </button>
+                  )}
+                  {inst.state === "error" && (
+                    <button
+                      type="button"
+                      disabled={restartInstance.isPending}
+                      onClick={() => restartInstance.mutate(inst.id)}
+                      className="mr-3 text-sm text-slate-600 hover:underline disabled:opacity-50"
+                    >
+                      Retry
+                    </button>
+                  )}
+                  {inst.state === "stopped" && (
+                    <button
+                      type="button"
+                      disabled={restartInstance.isPending}
+                      onClick={() => restartInstance.mutate(inst.id)}
+                      className="mr-3 text-sm text-slate-600 hover:underline disabled:opacity-50"
+                    >
+                      Resume
+                    </button>
+                  )}
+                  {(inst.state === "running" || inst.state === "starting") && (
+                    <button
+                      type="button"
+                      disabled={restartInstance.isPending}
+                      onClick={() => restartInstance.mutate(inst.id)}
+                      className="mr-3 text-sm text-slate-600 hover:underline disabled:opacity-50"
+                    >
+                      Restart
                     </button>
                   )}
                   <button
