@@ -6,6 +6,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -54,31 +55,41 @@ async def deploy(
             status_code=400, detail=f"engine '{body.engine}' does not support category '{model.category}'"
         )
 
-    if isinstance(body.gpu_selection, ManualGpuSelection):
-        worker, gpu_indexes, port = await allocate_manual(
-            db, body.gpu_selection.worker_id, body.gpu_selection.gpu_indexes, model.vram_required_mb
+    try:
+        if isinstance(body.gpu_selection, ManualGpuSelection):
+            worker, gpu_indexes, port = await allocate_manual(
+                db,
+                body.cluster_id,
+                body.gpu_selection.worker_id,
+                body.gpu_selection.gpu_indexes,
+                model.vram_required_mb,
+                body.engine,
+            )
+        else:
+            worker, gpu_indexes, port = await allocate_auto(
+                db, body.cluster_id, model.vram_required_mb, body.engine
+            )
+        instance = ModelInstance(
+            model_id=model.id,
+            cluster_id=cluster.id,
+            worker_id=worker.id,
+            engine=body.engine,
+            profile=body.profile,
+            gpu_indexes=gpu_indexes,
+            state="scheduled",
+            desired_state="running",
+            generation=1,
+            port=port,
         )
-    else:
-        worker, gpu_indexes, port = await allocate_auto(db, body.cluster_id, model.vram_required_mb)
-
-    instance = ModelInstance(
-        model_id=model.id,
-        cluster_id=cluster.id,
-        worker_id=worker.id,
-        engine=body.engine,
-        profile=body.profile,
-        gpu_indexes=gpu_indexes,
-        state="scheduled",
-        port=port,
-    )
-    instance.model = model
-    instance.worker = worker
-    instance.worker_name = worker.name
-    db.add(instance)
-    await db.commit()
+        instance.model = model
+        instance.worker = worker
+        instance.worker_name = worker.name
+        db.add(instance)
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="allocation conflict; retry") from None
     return instance
-
-
 @router.post("/{instance_id}/stop", response_model=InstanceOut)
 async def stop_instance(
     instance_id: uuid.UUID,
