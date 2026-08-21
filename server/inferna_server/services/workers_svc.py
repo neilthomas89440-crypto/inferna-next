@@ -57,6 +57,26 @@ async def register_worker(
     settings = get_settings()
     if request.cluster_token != settings.registration_token:
         raise grpc_error(grpc.StatusCode.PERMISSION_DENIED, "invalid cluster token")
+    # Protocol / version compatibility (B.7)
+    from inferna_server.version import MIN_WORKER_VERSION, PROTOCOL_VERSION
+
+    if request.protocol_version != PROTOCOL_VERSION:
+        raise grpc_error(
+            grpc.StatusCode.FAILED_PRECONDITION,
+            f"unsupported protocol version {request.protocol_version}; server supports {PROTOCOL_VERSION}",
+        )
+    version_str = request.version or "0.0.0"
+    try:
+        ver_tuple = tuple(int(p) for p in version_str.split(".")[:3])
+        # pad to 3 elements
+        ver_tuple = ver_tuple + (0,) * (3 - len(ver_tuple)) if len(ver_tuple) < 3 else ver_tuple
+    except ValueError:
+        ver_tuple = (0, 0, 0)
+    if ver_tuple < MIN_WORKER_VERSION:
+        raise grpc_error(
+            grpc.StatusCode.FAILED_PRECONDITION,
+            f"worker version {request.version or 'unknown'} is too old; minimum {'.'.join(map(str, MIN_WORKER_VERSION))}",
+        )
     cluster_name = request.cluster_name or "default"
     cluster = (
         await db.execute(select(Cluster).where(Cluster.name == cluster_name))

@@ -20,7 +20,8 @@ def make_register(
     hostname: str = "h1",
     worker_name: str = "",
     cluster_name: str = "default",
-    version: str = "0.1.0",
+    version: str = "0.2.0",
+    protocol_version: int = 1,
 ) -> cluster_pb2.RegisterRequest:
     return cluster_pb2.RegisterRequest(
         cluster_token=token,
@@ -28,6 +29,7 @@ def make_register(
         worker_name=worker_name,
         cluster_name=cluster_name,
         version=version,
+        protocol_version=protocol_version,
     )
 
 

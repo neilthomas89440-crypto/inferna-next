@@ -16,10 +16,10 @@ from inferna_worker.config import get_settings
 from inferna_worker.engines.manager import InstanceManager
 from inferna_worker.gpu import detect
 from inferna_worker.proto import cluster_pb2, cluster_pb2_grpc
+from inferna_worker.version import PROTOCOL_VERSION, VERSION
 
 logger = structlog.get_logger(__name__)
 
-VERSION = "0.1.0"
 DEFAULT_SYNC_INTERVAL_SECONDS = 5
 MAX_BACKOFF_SECONDS = 60
 
@@ -60,13 +60,6 @@ def gpu_infos(gpus) -> list[cluster_pb2.GPUInfo]:
     ]
 
 
-async def run_loop(settings) -> None:
-    manager = InstanceManager(settings)
-    await manager.startup_cleanup()
-
-    channel = grpc.aio.insecure_channel(settings.server_url)
-    stub = cluster_pb2_grpc.WorkerServiceStub(channel)
-
     # --- register (with backoff) ---
     backoff = 5
     worker_id: str | None = None
@@ -81,6 +74,7 @@ async def run_loop(settings) -> None:
                     worker_name=settings.worker_name,
                     cluster_name=settings.cluster_name,
                     version=VERSION,
+                    protocol_version=PROTOCOL_VERSION,
                 )
             )
             worker_id = response.worker_id
@@ -88,6 +82,9 @@ async def run_loop(settings) -> None:
             sync_interval = response.sync_interval_seconds or DEFAULT_SYNC_INTERVAL_SECONDS
             logger.info("registered with server", worker_id=worker_id, interval=sync_interval)
         except grpc.RpcError as exc:
+            if exc.code() == grpc.StatusCode.FAILED_PRECONDITION:
+                logger.error("server rejected worker", code=exc.code().name, detail=exc.details())
+                raise SystemExit(1)
             logger.warning("register failed, retrying", code=exc.code().name, backoff=backoff)
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, MAX_BACKOFF_SECONDS)

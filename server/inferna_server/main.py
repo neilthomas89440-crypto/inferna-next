@@ -19,8 +19,7 @@ from inferna_server.db import SessionLocal
 from inferna_server.grpc_server import serve_grpc
 from inferna_server.models import Cluster, User
 from inferna_server.services.workers_svc import seed_catalog
-
-logger = structlog.get_logger(__name__)
+from inferna_server.version import SERVER_VERSION
 
 
 @asynccontextmanager
@@ -61,10 +60,8 @@ async def _seed() -> None:
             await db.commit()
     except OperationalError:
         logger.warning("database tables missing — run `alembic upgrade head`; skipping seed")
-
-
 settings = get_settings()
-app = FastAPI(title="Inferna Next", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Inferna Next", version=SERVER_VERSION, lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list,
