@@ -118,8 +118,7 @@ async def run_loop(settings, manager: InstanceManager) -> None:
             await asyncio.sleep(sync_interval)
             tick += 1
     finally:
-        channel.close()
-
+        await channel.close()
 
 async def main() -> None:
     settings = get_settings()
