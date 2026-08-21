@@ -1,6 +1,6 @@
 [project]
 name = "inferna-worker"
-version = "0.1.0"
+version = "0.2.0"
 description = "Inferna Next GPU worker agent"
 requires-python = ">=3.12"
 dependencies = [

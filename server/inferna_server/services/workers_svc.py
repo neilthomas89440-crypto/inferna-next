@@ -57,6 +57,26 @@ async def register_worker(
     settings = get_settings()
     if request.cluster_token != settings.registration_token:
         raise grpc_error(grpc.StatusCode.PERMISSION_DENIED, "invalid cluster token")
+    # Protocol / version compatibility (B.7)
+    from inferna_server.version import MIN_WORKER_VERSION, PROTOCOL_VERSION
+
+    if request.protocol_version != PROTOCOL_VERSION:
+        raise grpc_error(
+            grpc.StatusCode.FAILED_PRECONDITION,
+            f"unsupported protocol version {request.protocol_version}; server supports {PROTOCOL_VERSION}",
+        )
+    version_str = request.version or "0.0.0"
+    try:
+        ver_tuple = tuple(int(p) for p in version_str.split(".")[:3])
+        # pad to 3 elements
+        ver_tuple = ver_tuple + (0,) * (3 - len(ver_tuple)) if len(ver_tuple) < 3 else ver_tuple
+    except ValueError:
+        ver_tuple = (0, 0, 0)
+    if ver_tuple < MIN_WORKER_VERSION:
+        raise grpc_error(
+            grpc.StatusCode.FAILED_PRECONDITION,
+            f"worker version {request.version or 'unknown'} is too old; minimum {'.'.join(map(str, MIN_WORKER_VERSION))}",
+        )
     cluster_name = request.cluster_name or "default"
     cluster = (
         await db.execute(select(Cluster).where(Cluster.name == cluster_name))
@@ -177,9 +197,7 @@ async def sync_worker(
             known = {str(r.id): r for r in rows}
     for status in request.instances:
         inst = known.get(status.instance_id)
-        if inst is None or inst.state == "stopped":
-            # Deleted instance, or user requested stop (worker not authoritative
-            # for desired state; it reconciles by executing the stop command).
+        if inst is None:
             continue
         inst.state = status.state
         inst.error_detail = status.detail or None
@@ -188,45 +206,52 @@ async def sync_worker(
 
     # --- build commands from desired state ---
     commands: list[cluster_pb2.InstanceCommand] = []
-    desired = (
+    # Load all instances assigned to this worker
+    all_instances = (
         (
             await db.execute(
                 select(ModelInstance)
                 .options(selectinload(ModelInstance.model))
-                .where(
-                    ModelInstance.worker_id == worker.id,
-                    ModelInstance.state.in_(("scheduled", "stopped")),
-                )
+                .where(ModelInstance.worker_id == worker.id)
             )
         )
         .scalars()
         .all()
     )
-    reported_state = {s.instance_id: s.state for s in request.instances}
-    for inst in desired:
-        if inst.state == "scheduled":
-            config = cluster_pb2.EngineConfig(
-                engine=inst.engine,
-                model_name=inst.model.name,
-                profile=inst.profile,
-                gpu_indexes=inst.gpu_indexes,
-                vram_required_mb=inst.model.vram_required_mb,
-                port=inst.port or 0,
-                requires_hf_token=inst.model.requires_hf_token,
-            )
-            commands.append(
-                cluster_pb2.InstanceCommand(instance_id=str(inst.id), action="start", config=config)
-            )
-        elif inst.state == "stopped" and reported_state.get(str(inst.id)) in (
-            "running",
-            "starting",
-        ):
-            commands.append(cluster_pb2.InstanceCommand(instance_id=str(inst.id), action="stop"))
+    reported: dict[str, cluster_pb2.InstanceStatus] = {s.instance_id: s for s in request.instances}
+    for inst in all_instances:
+        rep = reported.get(str(inst.id))
+        if inst.desired_state == "running":
+            applied = rep.generation if rep is not None else 0
+            obs = rep.state if rep is not None else "stopped"
+            if applied < inst.generation or obs == "stopped":
+                config = cluster_pb2.EngineConfig(
+                    engine=inst.engine,
+                    model_name=inst.model.name,
+                    profile=inst.profile,
+                    gpu_indexes=inst.gpu_indexes,
+                    vram_required_mb=inst.model.vram_required_mb,
+                    port=inst.port or 0,
+                    requires_hf_token=inst.model.requires_hf_token,
+                )
+                commands.append(
+                    cluster_pb2.InstanceCommand(
+                        instance_id=str(inst.id),
+                        action="start",
+                        generation=inst.generation,
+                        config=config,
+                    )
+                )
+        elif inst.desired_state == "stopped":
+            if rep is not None and rep.state in ("starting", "running"):
+                commands.append(
+                    cluster_pb2.InstanceCommand(instance_id=str(inst.id), action="stop")
+                )
 
     # Instances the worker runs but that no longer exist in the DB → remove.
     known_ids = set(known)
     for status in request.instances:
-        if status.state in ("running", "starting") and status.instance_id not in known_ids:
+        if status.instance_id not in known_ids:
             commands.append(
                 cluster_pb2.InstanceCommand(instance_id=status.instance_id, action="delete")
             )
@@ -239,13 +264,17 @@ async def seed_catalog(db: AsyncSession) -> None:
     """Upsert builtin catalog entries from fixtures/catalog.json (mark is_builtin)."""
     catalog = json.loads((FIXTURES_DIR / "catalog.json").read_text(encoding="utf-8"))
     for entry in catalog["models"]:
+        # Map catalog field "engines" -> DB column "supported_engines"
+        entry_mapped = dict(entry)
+        if "engines" in entry_mapped:
+            entry_mapped["supported_engines"] = entry_mapped.pop("engines")
         row = (
-            await db.execute(select(Model).where(Model.name == entry["name"]))
+            await db.execute(select(Model).where(Model.name == entry_mapped["name"]))
         ).scalar_one_or_none()
         if row is None:
-            db.add(Model(**entry, is_builtin=True))
+            db.add(Model(**entry_mapped, is_builtin=True))
         else:
-            for key, value in entry.items():
+            for key, value in entry_mapped.items():
                 setattr(row, key, value)
             row.is_builtin = True
     await db.flush()
@@ -270,6 +299,7 @@ async def mark_disconnected(db: AsyncSession) -> None:
                 await db.execute(
                     select(ModelInstance).where(
                         ModelInstance.worker_id == worker.id,
+                        ModelInstance.desired_state == "running",
                         ModelInstance.state.in_(LIVE_STATES),
                     )
                 )

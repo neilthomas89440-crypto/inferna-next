@@ -1,6 +1,6 @@
 [project]
 name = "inferna-server"
-version = "0.1.0"
+version = "0.2.0"
 description = "Inferna Next control plane: FastAPI + gRPC GPU cluster orchestration"
 requires-python = ">=3.12"
 dependencies = [

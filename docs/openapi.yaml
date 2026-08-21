@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Inferna Next
-  version: 0.1.0
+  version: 0.2.0
 paths:
   /api/v1/auth/login:
     post:
@@ -395,6 +395,35 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/model-instances/{instance_id}/restart:
+    post:
+      tags:
+      - instances
+      summary: Restart Instance
+      operationId: restart_instance_api_v1_model_instances__instance_id__restart_post
+      security:
+      - OAuth2PasswordBearer: []
+      parameters:
+      - name: instance_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Instance Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstanceOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /api/v1/model-instances/{instance_id}:
     delete:
       tags:
@@ -435,6 +464,23 @@ paths:
                 $ref: '#/components/schemas/DashboardOut'
       security:
       - OAuth2PasswordBearer: []
+  /api/v1/compatibility:
+    get:
+      tags:
+      - compatibility
+      summary: Compatibility
+      operationId: compatibility_api_v1_compatibility_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+                title: Response Compatibility Api V1 Compatibility Get
+      security:
+      - OAuth2PasswordBearer: []
   /healthz:
     get:
       summary: Healthz
@@ -449,6 +495,16 @@ paths:
                   type: string
                 type: object
                 title: Response Healthz Healthz Get
+  /readyz:
+    get:
+      summary: Readyz
+      operationId: readyz_readyz_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
 components:
   schemas:
     ClusterCreate:
@@ -651,6 +707,12 @@ components:
         state:
           type: string
           title: State
+        desired_state:
+          type: string
+          title: Desired State
+        generation:
+          type: integer
+          title: Generation
         port:
           anyOf:
           - type: integer
@@ -688,6 +750,8 @@ components:
       - profile
       - gpu_indexes
       - state
+      - desired_state
+      - generation
       - port
       - error_detail
       - created_at
@@ -762,6 +826,12 @@ components:
         is_builtin:
           type: boolean
           title: Is Builtin
+        supported_engines:
+          items:
+            type: string
+          type: array
+          title: Supported Engines
+          default: []
       type: object
       required:
       - id

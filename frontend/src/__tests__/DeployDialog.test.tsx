@@ -15,6 +15,7 @@ const MODEL: ModelInfo = {
   requires_hf_token: false,
   license: "apache-2.0",
   is_builtin: true,
+  supported_engines: ["vllm", "sglang"],
 };
 
 const CLUSTER = {
@@ -32,11 +33,13 @@ function jsonResponse(body: unknown, status = 200) {
 }
 
 // Route-aware fetch stub: clusters GET -> [CLUSTER]; deploy POST -> instance;
-// anything else -> []. Survives TanStack Query refetches/invalidations.
 function apiStub(overrides?: { deployError?: { detail: string } | null }) {
   return vi.fn((url: RequestInfo | URL, init?: RequestInit) => {
     const method = init?.method ?? "GET";
     const path = String(url);
+    if (path.includes("/compatibility")) {
+      return Promise.resolve(jsonResponse({ engine_vendors: { vllm: ["mock", "nvidia"], sglang: ["mock", "nvidia"] } }));
+    }
     if (path.includes("/model-instances") && method === "POST") {
       return Promise.resolve(
         overrides?.deployError
@@ -46,6 +49,9 @@ function apiStub(overrides?: { deployError?: { detail: string } | null }) {
     }
     if (path.includes("/clusters")) {
       return Promise.resolve(jsonResponse([CLUSTER]));
+    }
+    if (path.includes("/workers")) {
+      return Promise.resolve(jsonResponse([]));
     }
     return Promise.resolve(jsonResponse([]));
   });

@@ -46,6 +46,8 @@ async def test_deploy_happy_path(client, db) -> None:
     assert resp.status_code == 201, resp.text
     body = resp.json()
     assert body["state"] == "scheduled"
+    assert body["desired_state"] == "running"
+    assert body["generation"] == 1
     assert body["port"] == 8010
     assert body["engine"] == "vllm"
     assert body["profile"] == "latency"
@@ -122,11 +124,88 @@ async def test_stop_instance(client, db) -> None:
         headers=auth_headers(token),
     )
     instance_id = created.json()["id"]
+    assert created.json()["desired_state"] == "running"
+    assert created.json()["generation"] == 1
     resp = await client.post(
         f"/api/v1/model-instances/{instance_id}/stop", headers=auth_headers(token)
     )
     assert resp.status_code == 200
-    assert resp.json()["state"] == "stopped"
+    body = resp.json()
+    assert body["desired_state"] == "stopped"
+    assert body["generation"] == 2
+    assert body["error_detail"] is None
+    # observed state unchanged (still scheduled)
+    assert body["state"] == "scheduled"
+    # second stop is idempotent (no generation bump)
+    resp2 = await client.post(
+        f"/api/v1/model-instances/{instance_id}/stop", headers=auth_headers(token)
+    )
+    assert resp2.json()["generation"] == 2
+
+
+async def test_restart_from_stopped(client, db) -> None:
+    token = await _admin_token(client)
+    cluster = (await db.execute(select(Cluster).where(Cluster.name == "default"))).scalar_one()
+    await add_connected_worker(db, cluster.id, name="rst", gpus=((0, "mock", "A", 24576),))
+    created = await client.post(
+        "/api/v1/model-instances",
+        json=_deploy_body(await _model_id(db, "Qwen/Qwen2.5-0.5B-Instruct"), str(cluster.id)),
+        headers=auth_headers(token),
+    )
+    iid = created.json()["id"]
+    # stop -> desired stopped gen 2
+    await client.post(f"/api/v1/model-instances/{iid}/stop", headers=auth_headers(token))
+    # Simulate worker reporting stopped state directly in DB (observed)
+    from inferna_server.models import ModelInstance
+    import uuid
+
+    inst = (await db.execute(select(ModelInstance).where(ModelInstance.id == uuid.UUID(iid)))).scalar_one()
+    inst.state = "stopped"
+    await db.commit()
+    # restart should bump to gen 3 and desired running
+    resp = await client.post(f"/api/v1/model-instances/{iid}/restart", headers=auth_headers(token))
+    assert resp.status_code == 200
+    assert resp.json()["desired_state"] == "running"
+    assert resp.json()["generation"] == 3
+    assert resp.json()["error_detail"] is None
+
+
+async def test_restart_from_error(client, db) -> None:
+    token = await _admin_token(client)
+    cluster = (await db.execute(select(Cluster).where(Cluster.name == "default"))).scalar_one()
+    await add_connected_worker(db, cluster.id, name="err", gpus=((0, "mock", "A", 24576),))
+    created = await client.post(
+        "/api/v1/model-instances",
+        json=_deploy_body(await _model_id(db, "Qwen/Qwen2.5-0.5B-Instruct"), str(cluster.id)),
+        headers=auth_headers(token),
+    )
+    iid = created.json()["id"]
+    from inferna_server.models import ModelInstance
+    import uuid
+
+    inst = (await db.execute(select(ModelInstance).where(ModelInstance.id == uuid.UUID(iid)))).scalar_one()
+    inst.state = "error"
+    inst.error_detail = "boom"
+    await db.commit()
+    resp = await client.post(f"/api/v1/model-instances/{iid}/restart", headers=auth_headers(token))
+    assert resp.json()["desired_state"] == "running"
+    assert resp.json()["generation"] == 2
+    assert resp.json()["error_detail"] is None
+
+
+async def test_restart_from_running(client, db) -> None:
+    token = await _admin_token(client)
+    cluster = (await db.execute(select(Cluster).where(Cluster.name == "default"))).scalar_one()
+    await add_connected_worker(db, cluster.id, name="run", gpus=((0, "mock", "A", 24576),))
+    created = await client.post(
+        "/api/v1/model-instances",
+        json=_deploy_body(await _model_id(db, "Qwen/Qwen2.5-0.5B-Instruct"), str(cluster.id)),
+        headers=auth_headers(token),
+    )
+    iid = created.json()["id"]
+    resp = await client.post(f"/api/v1/model-instances/{iid}/restart", headers=auth_headers(token))
+    assert resp.json()["generation"] == 2
+    assert resp.json()["desired_state"] == "running"
 
 
 async def test_delete_instance(client, db) -> None:

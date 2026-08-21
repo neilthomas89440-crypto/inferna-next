@@ -32,6 +32,7 @@ export default function ModelsPage() {
         {models.data.map((model) => (
           <div
             key={model.id}
+            data-testid={`model-card-${model.name}`}
             className="flex flex-col rounded-lg border border-slate-200 bg-white p-4"
           >
             <div className="flex items-start justify-between gap-2">

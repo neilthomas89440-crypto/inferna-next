@@ -20,18 +20,43 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - name: Sync deps
         working-directory: ${{ matrix.dir }}
-        run: uv sync --dev
       - name: Ruff
         working-directory: ${{ matrix.dir }}
         run: uv run ruff check .
-      - name: Pyright (warn-only)
+      - name: Pyright
         working-directory: ${{ matrix.dir }}
-        continue-on-error: true
         run: uv run pyright
       - name: Pytest
         working-directory: ${{ matrix.dir }}
         run: uv run pytest
 
+  migrations:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env: {POSTGRES_USER: inferna, POSTGRES_PASSWORD: inferna, POSTGRES_DB: inferna}
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U inferna" --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --dev
+        working-directory: server
+      - name: Migration check (empty DB, down/up, previous-release upgrade)
+        working-directory: server
+        env:
+          INFERNA_DATABASE_URL: postgresql+asyncpg://inferna:inferna@localhost:5432/inferna
+        run: bash ../scripts/check-migrations.sh
+      - name: Concurrent allocation test (PostgreSQL)
+        working-directory: server
+        env:
+          INFERNA_DATABASE_URL: postgresql+asyncpg://inferna:inferna@localhost:5432/inferna
+        run: uv run alembic upgrade head && uv run pytest tests/test_scheduler_concurrency.py -v
   proto-check:
     runs-on: ubuntu-latest
     steps:

@@ -10,7 +10,9 @@ touches Docker.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import time
+from contextlib import suppress
 from typing import Any
 
 import httpx
@@ -24,8 +26,15 @@ from inferna_worker.proto import cluster_pb2
 logger = structlog.get_logger(__name__)
 
 CONTAINER_PREFIX = "inferna-instance-"
+LABEL_MANAGED = "inferna.managed"
+LABEL_INSTANCE_ID = "inferna.instance_id"
+LABEL_GENERATION = "inferna.generation"
+LABEL_PORT = "inferna.port"
 HEALTH_PROBE_INTERVAL_SECONDS = 10
-HEALTH_PROBE_TIMEOUT_SECONDS = 600
+HEALTH_PROBE_TIMEOUT_SECONDS = 2400
+IMAGE_PULL_TIMEOUT_SECONDS = 1800
+CONTAINER_OP_TIMEOUT_SECONDS = 120
+STOP_TIMEOUT_SECONDS = 60
 MOCK_START_DELAY_SECONDS = 2
 LOG_TAIL_LINES = 20
 
@@ -36,11 +45,12 @@ class InstanceManager:
         self.mock = settings.mock_engine
         self._docker = docker_client
         self._pulled_images: set[str] = set()
-        # instance_id -> {"state", "port", "detail", "started_at"}
+        # instance_id -> {"state", "port", "detail", "started_at", "generation"}
         self._instances: dict[str, dict[str, Any]] = {}
         self._probe_tasks: dict[str, asyncio.Task] = {}
         self._pending_probes: list[tuple[str, int]] = []
-        self._applying = False
+        self._batch_task: asyncio.Task[None] | None = None
+        self._pending: dict[str, cluster_pb2.InstanceCommand] = {}
 
     @property
     def docker(self) -> Any:
@@ -53,19 +63,69 @@ class InstanceManager:
     # --- lifecycle ---
 
     async def startup_cleanup(self) -> None:
-        """Crash recovery: remove orphaned inferna-instance-* containers."""
+        """Backward compat alias for adopt_existing."""
+        await self.adopt_existing()
+
+    async def adopt_existing(self) -> None:
+        """Adopt existing managed containers and clean legacy unmanaged ones."""
         if self.mock:
             return
-        await asyncio.to_thread(self._startup_cleanup_sync)
+        await asyncio.to_thread(self._adopt_existing_sync)
+
+    def _adopt_existing_sync(self) -> None:
+        try:
+            # Adopt managed containers
+            try:
+                managed = self.docker.containers.list(all=True, filters={"label": f"{LABEL_MANAGED}=true"})
+            except TypeError:
+                # FakeDocker may not support filters arg
+                managed = [c for c in self.docker.containers.list(all=True) if getattr(c, "labels", {}).get(LABEL_MANAGED) == "true"]
+            for container in managed:
+                try:
+                    name = getattr(container, "name", "")
+                    if not name.startswith(CONTAINER_PREFIX):
+                        continue
+                    instance_id = name[len(CONTAINER_PREFIX):]
+                    labels = getattr(container, "labels", {}) or {}
+                    # status may be "running", "exited", etc.
+                    c_status = getattr(container, "status", "running")
+                    state = "running" if c_status == "running" else "stopped"
+                    try:
+                        port = int(labels.get(LABEL_PORT, 0) or 0)
+                    except (ValueError, TypeError):
+                        port = 0
+                    try:
+                        generation = int(labels.get(LABEL_GENERATION, 0) or 0)
+                    except (ValueError, TypeError):
+                        generation = 0
+                    self._instances[instance_id] = {
+                        "state": state,
+                        "port": port,
+                        "generation": generation,
+                        "detail": "",
+                        "started_at": time.monotonic(),
+                    }
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("adopt managed container failed", error=str(exc))
+            # Remove legacy unmanaged containers with prefix but without managed label
+            for container in self.docker.containers.list(all=True):
+                try:
+                    name = getattr(container, "name", "")
+                    if not name.startswith(CONTAINER_PREFIX):
+                        continue
+                    labels = getattr(container, "labels", {}) or {}
+                    if labels.get(LABEL_MANAGED) == "true":
+                        continue
+                    logger.info("removing legacy container", name=name)
+                    container.remove(force=True)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("legacy removal failed", error=str(exc))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("adopt existing failed", error=str(exc))
 
     def _startup_cleanup_sync(self) -> None:
-        try:
-            for container in self.docker.containers.list(all=True):
-                if container.name.startswith(CONTAINER_PREFIX):
-                    logger.info("removing orphaned container", name=container.name)
-                    container.remove(force=True)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("startup cleanup failed", error=str(exc))
+        # Kept for backward compat but not used; delegates to adopt
+        self._adopt_existing_sync()
 
     async def reconcile(
         self, commands: list[cluster_pb2.InstanceCommand]
@@ -78,39 +138,69 @@ class InstanceManager:
                     if command.instance_id in self._instances:
                         self._instances[command.instance_id]["state"] = "stopped"
                         self._instances[command.instance_id]["detail"] = ""
+                        # keep generation as is
                 elif command.action == "delete":
                     self._instances.pop(command.instance_id, None)
             return self.statuses()
-        # Real mode: command application (image pulls!) can take minutes. Run
-        # it as a background task so the Sync loop keeps reporting and the
-        # server never marks the worker disconnected. One batch at a time:
-        # commands are recomputed from desired state each Sync, so a skipped
-        # duplicate is re-issued on the next cycle.
-        if not self._applying:
-            self._applying = True
-            asyncio.create_task(self._apply_batch(commands))
+        # Real mode: coalesce into pending if batch is running
+        if self._batch_task is not None and not self._batch_task.done():
+            for cmd in commands:
+                self._pending[cmd.instance_id] = cmd
+            return self.statuses()
+        # otherwise start new batch
+        self._batch_task = asyncio.create_task(self._apply_batch(commands))
         return self.statuses()
 
     async def _apply_batch(self, commands: list[cluster_pb2.InstanceCommand]) -> None:
         try:
             for command in commands:
-                await asyncio.to_thread(self._apply_docker_command, command)
+                try:
+                    await asyncio.to_thread(self._apply_docker_command, command)
+                except Exception as exc:  # noqa: BLE001
+                    logger.exception("command failed", instance_id=command.instance_id, error=str(exc))
+                    try:
+                        self._instances[command.instance_id] = {
+                            "state": "error",
+                            "port": command.config.port if command.HasField("config") else 0,
+                            "detail": str(exc),
+                            "generation": command.generation,
+                            "started_at": time.monotonic(),
+                        }
+                    except Exception:
+                        pass
             await asyncio.to_thread(self._remove_stale_containers_sync)
             self._schedule_pending_probes()
         except Exception:  # noqa: BLE001
             logger.exception("command batch failed")
         finally:
-            self._applying = False
-
+            self._batch_task = None
+            if self._pending:
+                pending = list(self._pending.values())
+                self._pending = {}
+                self._batch_task = asyncio.create_task(self._apply_batch(pending))
     def _apply_docker_command(self, command: cluster_pb2.InstanceCommand) -> None:
-        if command.action == "start":
-            self._start_sync(command)
-        elif command.action == "stop":
-            self._stop_sync(command.instance_id)
-        elif command.action == "delete":
-            self._delete_sync(command.instance_id)
-        else:
-            logger.warning("unknown command action", action=command.action)
+        try:
+            if command.action == "start":
+                self._start_sync(command)
+            elif command.action == "stop":
+                self._stop_sync(command.instance_id)
+            elif command.action == "delete":
+                self._delete_sync(command.instance_id)
+            else:
+                logger.warning("unknown command action", action=command.action)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("apply docker command failed", action=command.action, error=str(exc))
+            # Convert to error state ensuring generation recorded
+            try:
+                self._instances[command.instance_id] = {
+                    "state": "error",
+                    "port": command.config.port if command.HasField("config") else 0,
+                    "detail": str(exc),
+                    "generation": command.generation,
+                    "started_at": time.monotonic(),
+                }
+            except Exception:
+                pass
 
     def _schedule_pending_probes(self) -> None:
         for instance_id, port in self._pending_probes:
@@ -130,6 +220,7 @@ class InstanceManager:
                 "port": config.port,
                 "detail": "model requires HF token",
                 "started_at": time.monotonic(),
+                "generation": command.generation,
             }
             return
         self._instances[instance_id] = {
@@ -137,6 +228,7 @@ class InstanceManager:
             "port": config.port,
             "detail": "",
             "started_at": time.monotonic(),
+            "generation": command.generation,
         }
 
     # --- commands (real, run in a thread) ---
@@ -144,17 +236,24 @@ class InstanceManager:
     def _start_sync(self, command: cluster_pb2.InstanceCommand) -> None:
         instance_id = command.instance_id
         config = command.config
-        # Idempotency: a duplicate start command (re-issued while a previous
-        # batch is still applying) must not create a second container.
+        # Idempotency: skip if already starting/running with same or higher generation
         tracked = self._instances.get(instance_id)
-        if tracked is not None and tracked.get("state") in ("starting", "running", "stopped"):
+        if tracked is not None and tracked.get("state") in ("starting", "running") and tracked.get("generation", 0) >= command.generation:
             return
+        # If tracked exists with lower generation or stopped/error, remove old container before recreating
+        if tracked is not None and (tracked.get("generation", 0) < command.generation or tracked.get("state") in ("stopped", "error")):
+            try:
+                container = self.docker.containers.get(f"{CONTAINER_PREFIX}{instance_id}")
+                container.remove(force=True)
+            except Exception:
+                pass
         if config.requires_hf_token and not self.settings.hf_token:
             self._instances[instance_id] = {
                 "state": "error",
                 "port": config.port,
                 "detail": "model requires HF token",
                 "started_at": time.monotonic(),
+                "generation": command.generation,
             }
             return
         try:
@@ -162,15 +261,35 @@ class InstanceManager:
             image = image_for(config.engine, self.settings)
             if image not in self._pulled_images:
                 logger.info("pulling engine image", image=image)
-                docker_client.images.pull(image)
+                try:
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                        future = executor.submit(docker_client.images.pull, image)
+                        future.result(timeout=IMAGE_PULL_TIMEOUT_SECONDS)
+                except concurrent.futures.TimeoutError:
+                    self._instances[instance_id] = {
+                        "state": "error",
+                        "port": config.port,
+                        "detail": "image pull timed out",
+                        "started_at": time.monotonic(),
+                        "generation": command.generation,
+                    }
+                    logger.warning("image pull timed out", instance_id=instance_id, image=image)
+                    return
                 self._pulled_images.add(image)
             environment = {}
             if self.settings.hf_token:
                 environment["HF_HUB_TOKEN"] = self.settings.hf_token
+            labels = {
+                LABEL_MANAGED: "true",
+                LABEL_INSTANCE_ID: instance_id,
+                LABEL_GENERATION: str(command.generation),
+                LABEL_PORT: str(config.port),
+            }
             container = docker_client.containers.create(
                 image,
                 name=f"{CONTAINER_PREFIX}{instance_id}",
                 entrypoint=[],
+                labels=labels,
                 device_requests=[
                     DeviceRequest(
                         device_ids=[str(i) for i in config.gpu_indexes],
@@ -193,6 +312,7 @@ class InstanceManager:
                 "port": config.port,
                 "detail": "",
                 "started_at": time.monotonic(),
+                "generation": command.generation,
             }
             self._pending_probes.append((instance_id, config.port))
             logger.info("instance started", instance_id=instance_id, port=config.port)
@@ -202,6 +322,7 @@ class InstanceManager:
                 "port": config.port,
                 "detail": f"docker unavailable: {exc}",
                 "started_at": time.monotonic(),
+                "generation": command.generation,
             }
             logger.warning("instance start failed", instance_id=instance_id, error=str(exc))
 
@@ -215,6 +336,7 @@ class InstanceManager:
         except Exception:  # noqa: BLE001  (NotFound included: nothing to stop)
             pass
         if instance_id in self._instances:
+            # keep generation
             self._instances[instance_id]["state"] = "stopped"
             self._instances[instance_id]["detail"] = ""
 
@@ -230,14 +352,19 @@ class InstanceManager:
         self._instances.pop(instance_id, None)
 
     def _remove_stale_containers_sync(self) -> None:
-        """Remove tracked-set leftovers (server-side deletes covered)."""
+        """Remove managed containers not in _instances (server-side deletes)."""
         try:
-            for container in self.docker.containers.list(all=True):
-                if not container.name.startswith(CONTAINER_PREFIX):
+            try:
+                containers = self.docker.containers.list(all=True, filters={"label": f"{LABEL_MANAGED}=true"})
+            except TypeError:
+                containers = [c for c in self.docker.containers.list(all=True) if getattr(c, "labels", {}).get(LABEL_MANAGED) == "true"]
+            for container in containers:
+                name = getattr(container, "name", "")
+                if not name.startswith(CONTAINER_PREFIX):
                     continue
-                instance_id = container.name[len(CONTAINER_PREFIX) :]
+                instance_id = name[len(CONTAINER_PREFIX):]
                 if instance_id not in self._instances:
-                    logger.info("removing stale container", name=container.name)
+                    logger.info("removing stale container", name=name)
                     container.remove(force=True)
         except Exception as exc:  # noqa: BLE001
             logger.warning("stale container sweep failed", error=str(exc))
@@ -248,6 +375,21 @@ class InstanceManager:
         url = f"http://127.0.0.1:{port}/v1/models"
         deadline = time.monotonic() + HEALTH_PROBE_TIMEOUT_SECONDS
         while time.monotonic() < deadline:
+            # Fast path: check if container exited
+            if not self.mock:
+                try:
+                    container = await asyncio.to_thread(self.docker.containers.get, f"{CONTAINER_PREFIX}{instance_id}")
+                    c_status = getattr(container, "status", "")
+                    if c_status in ("exited", "dead"):
+                        info = self._instances.get(instance_id)
+                        if info is not None:
+                            tail = await asyncio.to_thread(self._container_log_tail, instance_id)
+                            info["state"] = "error"
+                            info["detail"] = tail or f"container {c_status}"
+                        logger.warning("container exited", instance_id=instance_id, status=c_status)
+                        return
+                except Exception:
+                    pass
             try:
                 async with httpx.AsyncClient(timeout=5) as client:
                     response = await client.get(url)
@@ -260,6 +402,20 @@ class InstanceManager:
                     return
             except httpx.HTTPError:
                 pass
+            # second check after request
+            if not self.mock:
+                try:
+                    container = await asyncio.to_thread(self.docker.containers.get, f"{CONTAINER_PREFIX}{instance_id}")
+                    c_status = getattr(container, "status", "")
+                    if c_status in ("exited", "dead"):
+                        info = self._instances.get(instance_id)
+                        if info is not None:
+                            tail = await asyncio.to_thread(self._container_log_tail, instance_id)
+                            info["state"] = "error"
+                            info["detail"] = tail or f"container {c_status}"
+                        return
+                except Exception:
+                    pass
             await asyncio.sleep(HEALTH_PROBE_INTERVAL_SECONDS)
         info = self._instances.get(instance_id)
         if info is not None:
@@ -293,6 +449,27 @@ class InstanceManager:
                     state=state,
                     detail=info.get("detail", ""),
                     port=info.get("port") or 0,
+                    generation=info.get("generation", 0),
                 )
             )
         return result
+
+    async def shutdown(self) -> None:
+        if self._batch_task is not None:
+            self._batch_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._batch_task
+        for task in list(self._probe_tasks.values()):
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+        self._probe_tasks.clear()
+        self._pending_probes.clear()
+        if not self.mock:
+            try:
+                # docker client may have close method
+                close = getattr(self.docker, "close", None)
+                if callable(close):
+                    close()
+            except Exception:
+                pass

@@ -13,6 +13,7 @@ message RegisterRequest {
   string worker_name = 3;     // optional; empty = use hostname
   string cluster_name = 4;    // optional; empty = "default"
   string version = 5;
+  int32 protocol_version = 6;
 }
 
 message RegisterResponse {
@@ -38,12 +39,12 @@ message SystemInfo {
   string os = 3;
   string hostname = 4;
 }
-
 message InstanceStatus {
   string instance_id = 1;
   string state = 2;           // "scheduled" | "starting" | "running" | "stopped" | "error"
   string detail = 3;          // error text / progress note
   int32 port = 4;             // host port once running
+  int64 generation = 5;
 }
 
 message EngineConfig {
@@ -55,11 +56,11 @@ message EngineConfig {
   int32 port = 6;             // host port allocated by server
   bool requires_hf_token = 7; // worker must have INFERNA_HF_TOKEN set
 }
-
 message InstanceCommand {
   string instance_id = 1;
   string action = 2;          // "start" | "stop" | "delete"
   EngineConfig config = 3;    // set when action == "start"
+  int64 generation = 4;
 }
 
 message SyncRequest {

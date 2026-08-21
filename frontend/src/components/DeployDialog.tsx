@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
-import { useClusters, useDeployInstance, useWorkers } from "../api/hooks";
+import { useClusters, useCompatibility, useDeployInstance, useWorkers } from "../api/hooks";
 import type { Engine, ModelInfo, Profile } from "../api/types";
 
 interface DeployDialogProps {
@@ -14,7 +14,7 @@ export default function DeployDialog({ model, onClose }: DeployDialogProps) {
   const deploy = useDeployInstance();
 
   const [clusterId, setClusterId] = useState("");
-  const [engine, setEngine] = useState<Engine>("vllm");
+  const [engine, setEngine] = useState<Engine | "">("");
   const [profile, setProfile] = useState<Profile>("latency");
   const [mode, setMode] = useState<"auto" | "manual">("auto");
   const [workerId, setWorkerId] = useState("");
@@ -22,6 +22,7 @@ export default function DeployDialog({ model, onClose }: DeployDialogProps) {
   const [error, setError] = useState<string | null>(null);
 
   const workers = useWorkers(clusterId || undefined);
+  const compat = useCompatibility();
 
   useEffect(() => {
     if (clusters.data && clusters.data.length > 0 && !clusterId) {
@@ -35,6 +36,12 @@ export default function DeployDialog({ model, onClose }: DeployDialogProps) {
     }
   }, [workers.data, workerId]);
 
+  useEffect(() => {
+    if (model.supported_engines.length > 0 && !engine) {
+      setEngine(model.supported_engines[0] as Engine);
+    }
+  }, [model.supported_engines, engine]);
+
   const selectedWorker = workers.data?.find((w) => w.id === workerId);
 
   const toggleGpu = (index: number) => {
@@ -46,6 +53,10 @@ export default function DeployDialog({ model, onClose }: DeployDialogProps) {
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setError(null);
+    if (!engine) {
+      setError("No engine available for this model");
+      return;
+    }
     if (mode === "manual" && gpuIndexes.length === 0) {
       setError("Select at least one GPU");
       return;
@@ -54,7 +65,7 @@ export default function DeployDialog({ model, onClose }: DeployDialogProps) {
       await deploy.mutateAsync({
         model_id: model.id,
         cluster_id: clusterId,
-        engine,
+        engine: engine as Engine,
         profile,
         gpu_selection:
           mode === "manual" ? { worker_id: workerId, gpu_indexes: gpuIndexes } : "auto",
@@ -65,7 +76,6 @@ export default function DeployDialog({ model, onClose }: DeployDialogProps) {
       setError(err instanceof Error ? err.message : "Deploy failed");
     }
   };
-
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
       <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-lg bg-white p-6 shadow-xl">
@@ -90,9 +100,7 @@ export default function DeployDialog({ model, onClose }: DeployDialogProps) {
               ))}
             </select>
             {clusters.data?.length === 0 && (
-              <span className="mt-1 block text-xs text-red-600">
-                No clusters exist yet.
-              </span>
+              <span className="mt-1 block text-xs text-red-600">No clusters exist yet.</span>
             )}
           </label>
 
@@ -103,9 +111,17 @@ export default function DeployDialog({ model, onClose }: DeployDialogProps) {
               onChange={(e) => setEngine(e.target.value as Engine)}
               className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
             >
-              <option value="vllm">vLLM</option>
-              <option value="sglang">SGLang</option>
+              {model.supported_engines.map((e) => (
+                <option key={e} value={e}>
+                  {e === "vllm" ? "vLLM" : "SGLang"}
+                </option>
+              ))}
             </select>
+            {model.supported_engines.length === 0 && (
+              <span className="mt-1 block text-xs text-red-600">
+                No engine supports this model category in the current image set
+              </span>
+            )}
           </label>
 
           <fieldset>
@@ -167,16 +183,19 @@ export default function DeployDialog({ model, onClose }: DeployDialogProps) {
                 {selectedWorker?.gpus.map((gpu) => {
                   const freeMb = gpu.vram_mb - gpu.used_vram_mb;
                   const fits = freeMb >= model.vram_required_mb;
+                  const vendorOk =
+                    !!engine && !!compat.data?.engine_vendors[engine]?.includes(gpu.vendor);
+                  const disabled = !fits || !vendorOk;
                   return (
                     <label
                       key={gpu.id}
                       className={`flex items-center gap-2 rounded-md border px-3 py-2 text-sm ${
-                        fits ? "border-slate-300" : "border-slate-200 opacity-60"
+                        !disabled ? "border-slate-300" : "border-slate-200 opacity-60"
                       }`}
                     >
                       <input
                         type="checkbox"
-                        disabled={!fits}
+                        disabled={disabled}
                         checked={gpuIndexes.includes(gpu.index)}
                         onChange={() => toggleGpu(gpu.index)}
                         className="accent-indigo-600"
@@ -186,6 +205,7 @@ export default function DeployDialog({ model, onClose }: DeployDialogProps) {
                       <span className="ml-auto text-xs text-slate-400">
                         {Math.round(freeMb / 1024)} GB free
                         {fits ? "" : " · too small"}
+                        {!vendorOk ? ` · engine not supported on ${gpu.vendor}` : ""}
                       </span>
                     </label>
                   );
@@ -210,7 +230,7 @@ export default function DeployDialog({ model, onClose }: DeployDialogProps) {
             </button>
             <button
               type="submit"
-              disabled={deploy.isPending}
+              disabled={deploy.isPending || model.supported_engines.length === 0}
               className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
             >
               {deploy.isPending ? "Deploying…" : "Deploy"}

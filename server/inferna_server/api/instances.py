@@ -6,6 +6,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -49,32 +50,46 @@ async def deploy(
     cluster = await db.get(Cluster, body.cluster_id)
     if cluster is None:
         raise HTTPException(status_code=404, detail="cluster not found")
-
-    if isinstance(body.gpu_selection, ManualGpuSelection):
-        worker, gpu_indexes, port = await allocate_manual(
-            db, body.gpu_selection.worker_id, body.gpu_selection.gpu_indexes, model.vram_required_mb
+    if body.engine not in (model.supported_engines or []):
+        raise HTTPException(
+            status_code=400, detail=f"engine '{body.engine}' does not support category '{model.category}'"
         )
-    else:
-        worker, gpu_indexes, port = await allocate_auto(db, body.cluster_id, model.vram_required_mb)
 
-    instance = ModelInstance(
-        model_id=model.id,
-        cluster_id=cluster.id,
-        worker_id=worker.id,
-        engine=body.engine,
-        profile=body.profile,
-        gpu_indexes=gpu_indexes,
-        state="scheduled",
-        port=port,
-    )
-    instance.model = model
-    instance.worker = worker
-    instance.worker_name = worker.name
-    db.add(instance)
-    await db.commit()
+    try:
+        if isinstance(body.gpu_selection, ManualGpuSelection):
+            worker, gpu_indexes, port = await allocate_manual(
+                db,
+                body.cluster_id,
+                body.gpu_selection.worker_id,
+                body.gpu_selection.gpu_indexes,
+                model.vram_required_mb,
+                body.engine,
+            )
+        else:
+            worker, gpu_indexes, port = await allocate_auto(
+                db, body.cluster_id, model.vram_required_mb, body.engine
+            )
+        instance = ModelInstance(
+            model_id=model.id,
+            cluster_id=cluster.id,
+            worker_id=worker.id,
+            engine=body.engine,
+            profile=body.profile,
+            gpu_indexes=gpu_indexes,
+            state="scheduled",
+            desired_state="running",
+            generation=1,
+            port=port,
+        )
+        instance.model = model
+        instance.worker = worker
+        instance.worker_name = worker.name
+        db.add(instance)
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="allocation conflict; retry") from None
     return instance
-
-
 @router.post("/{instance_id}/stop", response_model=InstanceOut)
 async def stop_instance(
     instance_id: uuid.UUID,
@@ -93,10 +108,41 @@ async def stop_instance(
     ).scalar_one_or_none()
     if instance is None:
         raise HTTPException(status_code=404, detail="instance not found")
-    if instance.state in ("scheduled", "starting", "running"):
-        instance.state = "stopped"
+    if instance.desired_state != "stopped":
+        instance.desired_state = "stopped"
+        instance.generation += 1
         instance.error_detail = None
         await db.commit()
+        await db.refresh(instance)
+    # Populate worker_name for response even on no-op (already stopped) — best-effort
+    if instance.worker is not None:
+        instance.worker_name = instance.worker.name
+    return instance
+
+
+@router.post("/{instance_id}/restart", response_model=InstanceOut)
+async def restart_instance(
+    instance_id: uuid.UUID,
+    _: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ModelInstance:
+    instance = (
+        await db.execute(
+            select(ModelInstance)
+            .options(
+                selectinload(ModelInstance.worker),
+                selectinload(ModelInstance.model),
+            )
+            .where(ModelInstance.id == instance_id)
+        )
+    ).scalar_one_or_none()
+    if instance is None:
+        raise HTTPException(status_code=404, detail="instance not found")
+    instance.desired_state = "running"
+    instance.generation += 1
+    instance.error_detail = None
+    await db.commit()
+    await db.refresh(instance)
     if instance.worker is not None:
         instance.worker_name = instance.worker.name
     return instance
