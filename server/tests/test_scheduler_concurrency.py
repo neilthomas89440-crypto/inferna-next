@@ -17,7 +17,6 @@ async def test_concurrent_vram_allocation_serialized():
 
     from inferna_server.services.workers_svc import seed_catalog
 
-    # Build own PG engine/sessionmaker
     engine = create_async_engine(get_settings().database_url)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -28,9 +27,10 @@ async def test_concurrent_vram_allocation_serialized():
             await seed_catalog(db)
             await db.commit()
             cluster = (await db.execute(select(Cluster).where(Cluster.name == "default"))).scalar_one()
-            # single GPU worker with limited VRAM
             from inferna_server.services.workers_svc import sha256_hex
+            import uuid as _uuid
 
+            # Single GPU with 4096 MB — fits exactly 2×2048 MB models
             worker = Worker(
                 cluster_id=cluster.id,
                 name="conc-worker",
@@ -46,7 +46,7 @@ async def test_concurrent_vram_allocation_serialized():
                     index=0,
                     vendor="nvidia",
                     name="A100",
-                    vram_mb=16384,
+                    vram_mb=4096,
                     used_vram_mb=0,
                     utilization_pct=0,
                 )
@@ -55,19 +55,53 @@ async def test_concurrent_vram_allocation_serialized():
             await db.refresh(worker)
 
             model = (await db.execute(select(Model).where(Model.name == "Qwen/Qwen2.5-0.5B-Instruct"))).scalar_one()
+            assert model.vram_required_mb == 2048
 
-            # Try two concurrent allocations that together would exceed VRAM
-            # Model needs 2048, GPU has 16384, so 10 concurrent could fit, but we test serialization not to duplicate port.
-            # Run two allocates concurrently in separate sessions to check advisory lock / unique index handles it.
-            async def alloc():
-                async with Session() as s:
-                    w, idx, port = await allocate_auto(s, cluster.id, model.vram_required_mb, "vllm")
-                    # do not commit instance, just return port
-                    return port
-
+            # 5 concurrent allocate+create — only 2 should succeed, 3 should get 400
             import asyncio
+            from fastapi import HTTPException
 
-            ports = await asyncio.gather(alloc(), alloc())
-            assert ports[0] != ports[1], "concurrent allocates should get different ports"
+            from inferna_server.models import ModelInstance
+
+            async def try_allocate():
+                async with Session() as s:
+                    try:
+                        w, gpu_indexes, port = await allocate_auto(s, cluster.id, model.vram_required_mb, "vllm")
+                        inst = ModelInstance(
+                            model_id=model.id,
+                            cluster_id=cluster.id,
+                            worker_id=w.id,
+                            engine="vllm",
+                            profile="latency",
+                            gpu_indexes=gpu_indexes,
+                            state="scheduled",
+                            desired_state="running",
+                            generation=1,
+                            port=port,
+                        )
+                        s.add(inst)
+                        await s.commit()
+                        return True, port
+                    except HTTPException as exc:
+                        await s.rollback()
+                        # expected for overflow
+                        if exc.status_code == 400 and "no GPU with enough free VRAM" in exc.detail:
+                            return False, None
+                        # port conflict also acceptable as 409
+                        if exc.status_code == 409:
+                            return False, None
+                        raise
+                    except Exception:
+                        await s.rollback()
+                        raise
+
+            results = await asyncio.gather(*[try_allocate() for _ in range(5)])
+            successes = [r for r in results if r[0]]
+            failures = [r for r in results if not r[0]]
+            assert len(successes) == 2, f"expected 2 successes, got {len(successes)}: {results}"
+            assert len(failures) == 3, f"expected 3 failures, got {len(failures)}: {results}"
+            # also ensure ports are unique among successes
+            ports = [p for _, p in successes]
+            assert len(set(ports)) == len(ports)
     finally:
         await engine.dispose()

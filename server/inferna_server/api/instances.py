@@ -114,6 +114,7 @@ async def stop_instance(
         instance.error_detail = None
         await db.commit()
         await db.refresh(instance)
+    # Populate worker_name for response even on no-op (already stopped) — best-effort
     if instance.worker is not None:
         instance.worker_name = instance.worker.name
     return instance

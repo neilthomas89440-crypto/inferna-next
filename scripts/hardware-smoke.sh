@@ -57,7 +57,7 @@ poll_until() {
 }
 
 # Iterate over models
-echo "$MODELS_JSON" | jq -c '.[]' | while read -r model; do
+while read -r model; do
   mname="$(echo "$model" | jq -r '.name')"
   mid="$(echo "$model" | jq -r '.id')"
   category="$(echo "$model" | jq -r '.category')"
@@ -116,8 +116,7 @@ echo "$MODELS_JSON" | jq -c '.[]' | while read -r model; do
     echo "  cleaned up"
     REPORT_LINES+=("$mname | $category | $engine | pass | $(date -I) $worker_name")
   done
-done
-
+done < <(echo "$MODELS_JSON" | jq -c '.[]')
 echo ""
 echo "=== REPORT (copy to docs/engine-matrix.md) ==="
 for line in "${REPORT_LINES[@]}"; do

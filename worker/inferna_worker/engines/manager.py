@@ -157,7 +157,6 @@ class InstanceManager:
                     await asyncio.to_thread(self._apply_docker_command, command)
                 except Exception as exc:  # noqa: BLE001
                     logger.exception("command failed", instance_id=command.instance_id, error=str(exc))
-                    # ensure error state with generation
                     try:
                         self._instances[command.instance_id] = {
                             "state": "error",
@@ -178,7 +177,6 @@ class InstanceManager:
                 pending = list(self._pending.values())
                 self._pending = {}
                 self._batch_task = asyncio.create_task(self._apply_batch(pending))
-
     def _apply_docker_command(self, command: cluster_pb2.InstanceCommand) -> None:
         try:
             if command.action == "start":
