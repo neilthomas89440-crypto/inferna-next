@@ -5,7 +5,19 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from inferna_server.db import Base
@@ -27,6 +39,9 @@ class TimestampMixin:
 
 class User(Base, TimestampMixin):
     __tablename__ = "users"
+    __table_args__ = (
+        CheckConstraint("role IN ('admin','user')", name="ck_users_role"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     username: Mapped[str] = mapped_column(String(64), unique=True, index=True)
@@ -49,6 +64,11 @@ class Cluster(Base):
 
 class Worker(Base):
     __tablename__ = "workers"
+    __table_args__ = (
+        UniqueConstraint("cluster_id", "hostname", name="uq_workers_cluster_hostname"),
+        UniqueConstraint("cluster_id", "name", name="uq_workers_cluster_name"),
+        CheckConstraint("state IN ('connected','disconnected')", name="ck_workers_state"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     cluster_id: Mapped[uuid.UUID] = mapped_column(
@@ -72,10 +92,16 @@ class Worker(Base):
     instances: Mapped[list[ModelInstance]] = relationship(back_populates="worker")
 
 
+
+
 class WorkerGPU(Base):
     """Per-Sync snapshot of one GPU. Upserted by (worker_id, index); stale rows deleted."""
 
     __tablename__ = "worker_gpus"
+    __table_args__ = (
+        UniqueConstraint("worker_id", "index", name="uq_worker_gpus_worker_index"),
+        CheckConstraint("vendor IN ('nvidia','amd','mock')", name="ck_worker_gpus_vendor"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     worker_id: Mapped[uuid.UUID] = mapped_column(
@@ -92,9 +118,14 @@ class WorkerGPU(Base):
 
     worker: Mapped[Worker] = relationship(back_populates="gpus")
 
-
 class Model(Base):
     __tablename__ = "models"
+    __table_args__ = (
+        CheckConstraint(
+            "category IN ('llm','embedding','reranker','audio','multimodal')",
+            name="ck_models_category",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     name: Mapped[str] = mapped_column(String(255), unique=True)  # huggingface id
@@ -106,23 +137,55 @@ class Model(Base):
     requires_hf_token: Mapped[bool] = mapped_column(Boolean, default=False)
     license: Mapped[str | None] = mapped_column(String(64), nullable=True)
     is_builtin: Mapped[bool] = mapped_column(Boolean, default=False)
+    supported_engines: Mapped[list[str]] = mapped_column(JSON, default=list, server_default="[]")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-
 
 class ModelInstance(Base, TimestampMixin):
     __tablename__ = "model_instances"
     __allow_unmapped__ = True
+    __table_args__ = (
+        CheckConstraint(
+            "state IN ('scheduled','starting','running','stopped','error')",
+            name="ck_model_instances_state",
+        ),
+        CheckConstraint(
+            "desired_state IN ('running','stopped')",
+            name="ck_model_instances_desired_state",
+        ),
+        CheckConstraint("engine IN ('vllm','sglang')", name="ck_model_instances_engine"),
+        CheckConstraint(
+            "profile IN ('latency','throughput')", name="ck_model_instances_profile"
+        ),
+        Index(
+            "uq_model_instances_worker_port_active",
+            "worker_id",
+            "port",
+            unique=True,
+            postgresql_where=text(
+                "desired_state = 'running' OR state IN ('scheduled','starting','running')"
+            ),
+            sqlite_where=text(
+                "desired_state = 'running' OR state IN ('scheduled','starting','running')"
+            ),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    model_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("models.id"), index=True)
-    cluster_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("clusters.id"), index=True)
+    model_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("models.id", ondelete="RESTRICT"), index=True
+    )
+    cluster_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("clusters.id", ondelete="CASCADE"), index=True
+    )
     worker_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("workers.id"), nullable=True, index=True
+        ForeignKey("workers.id", ondelete="SET NULL"), nullable=True, index=True
     )
     engine: Mapped[str] = mapped_column(String(16))  # vllm | sglang
     profile: Mapped[str] = mapped_column(String(16))  # latency | throughput
     gpu_indexes: Mapped[list[int]] = mapped_column(JSON)
     state: Mapped[str] = mapped_column(String(16), default="scheduled")
+    desired_state: Mapped[str] = mapped_column(String(16), default="running", server_default="running")
+    generation: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     port: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
 
