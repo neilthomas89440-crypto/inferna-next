@@ -168,6 +168,31 @@ def upgrade() -> None:
     if orphan_count and int(orphan_count) != 0:
         raise RuntimeError(f"orphaned model_instances.worker_id references after dedup: {orphan_count}")
 
+    # Global fix for duplicate active ports per worker (including intra-worker duplicates
+    # and remaining inter-worker collisions after reassignment). Keeps earliest instance per (worker_id, port).
+    dup_groups = list(conn.execute(sa.text("""
+        SELECT worker_id, port FROM model_instances
+        WHERE (desired_state = 'running' OR state IN ('scheduled','starting','running'))
+          AND port IS NOT NULL
+        GROUP BY worker_id, port HAVING COUNT(*) > 1
+    """)).mappings())
+    for grp in dup_groups:
+        wid = grp['worker_id']
+        port = grp['port']
+        insts = list(conn.execute(sa.text("""
+            SELECT id FROM model_instances
+            WHERE worker_id = :wid AND port = :port
+              AND (desired_state = 'running' OR state IN ('scheduled','starting','running'))
+            ORDER BY created_at ASC, id ASC
+        """), {"wid": wid, "port": port}).mappings())
+        # keep first, null out rest
+        for dup_inst in insts[1:]:
+            conn.execute(sa.text("""
+                UPDATE model_instances
+                SET port = NULL, state = 'error', error_detail = 'dedup duplicate port', desired_state = 'stopped'
+                WHERE id = :iid
+            """), {"iid": dup_inst['id']})
+
     # Now create the active port unique index (deferred to avoid collision during reassignment)
     where_expr = sa.text("desired_state = 'running' OR state IN ('scheduled','starting','running')")
     op.create_index(
