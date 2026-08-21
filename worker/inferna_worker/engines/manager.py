@@ -10,6 +10,7 @@ touches Docker.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import time
 from contextlib import suppress
 from typing import Any
@@ -246,13 +247,6 @@ class InstanceManager:
                 container.remove(force=True)
             except Exception:
                 pass
-            # need to handle case where state is running with lower generation: also recreate (need to remove)
-            if tracked.get("state") in ("starting", "running") and tracked.get("generation", 0) < command.generation:
-                try:
-                    container = self.docker.containers.get(f"{CONTAINER_PREFIX}{instance_id}")
-                    container.remove(force=True)
-                except Exception:
-                    pass
         if config.requires_hf_token and not self.settings.hf_token:
             self._instances[instance_id] = {
                 "state": "error",
@@ -267,8 +261,20 @@ class InstanceManager:
             image = image_for(config.engine, self.settings)
             if image not in self._pulled_images:
                 logger.info("pulling engine image", image=image)
-                # In real code would use timeout wrapping; simplified here
-                docker_client.images.pull(image)
+                try:
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                        future = executor.submit(docker_client.images.pull, image)
+                        future.result(timeout=IMAGE_PULL_TIMEOUT_SECONDS)
+                except concurrent.futures.TimeoutError:
+                    self._instances[instance_id] = {
+                        "state": "error",
+                        "port": config.port,
+                        "detail": "image pull timed out",
+                        "started_at": time.monotonic(),
+                        "generation": command.generation,
+                    }
+                    logger.warning("image pull timed out", instance_id=instance_id, image=image)
+                    return
                 self._pulled_images.add(image)
             environment = {}
             if self.settings.hf_token:
