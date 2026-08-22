@@ -102,7 +102,7 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     app.state.gateway_client = httpx.AsyncClient(
         timeout=httpx.Timeout(
-            connect=settings.gateway_connect_timeout, read=settings.gateway_read_timeout
+            settings.gateway_read_timeout, connect=settings.gateway_connect_timeout
         )
     )
     logger.info("startup complete", grpc_port=settings.grpc_port)

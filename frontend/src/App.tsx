@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import Layout from "./components/Layout";
 import { useAuth } from "./context/AuthContext";
+import ApiKeysPage from "./pages/ApiKeysPage";
 import ClusterDetailPage from "./pages/ClusterDetailPage";
 import ClustersPage from "./pages/ClustersPage";
 import DashboardPage from "./pages/DashboardPage";
@@ -39,6 +40,7 @@ export default function App() {
         <Route path="/models" element={<ModelsPage />} />
         <Route path="/models/:modelId" element={<ModelDetailPage />} />
         <Route path="/instances" element={<InstancesPage />} />
+        <Route path="/keys" element={<ApiKeysPage />} />
         <Route path="/users" element={<UsersPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>

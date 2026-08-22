@@ -72,11 +72,14 @@ Disconnect handling: a server background task marks workers with `last_seen_at` 
 - Roles: `admin` (manages users/clusters/workers) and `user` (deploys/stops/deletes
   instances, reads everything). No self-registration.
 - Worker gRPC auth: cluster token on Register, per-worker token on Sync (SHA-256 hash stored).
+- Inference API keys: `Authorization: Bearer inf-<key>`, SHA-256 hash stored in `api_keys`,
+  revocable, default scope `inference`.
 - `INFERNA_AUTH_ENABLED=false` disables auth for dev (all requests act as admin).
 
 ### Network boundary
 
-- `9091` (gRPC) and `8010–8100` (instance ports) are only reachable from the private network. `8000` (REST API) sits behind a reverse proxy that terminates TLS; workers dial towards the server, not the other way round.
+- `9091` (gRPC) and `8010–8100` (instance ports) are only reachable from the private network. `8000` (REST API) sits behind a reverse proxy that terminates TLS. Control traffic is worker→server: workers dial the gRPC endpoint on `9091`; the server never dials workers for control.
+- The `/v1` inference gateway (server root, `:8000/v1`) proxies client inference requests **server→worker** over TCP to `8010–8100` inside the private network. The server reaches a worker at `worker.address` (set via `INFERNA_WORKER_ADDRESS`) falling back to the registered hostname. Direct client access to instance ports is no longer required and remains an advanced mode only.
 - `docker-compose.yml` is a **dev/demo artifact**: it publishes `9091` on all interfaces so a worker outside the compose network (e.g. an NVIDIA node on another host) can reach it. In production the server host **must** close `9091` with a firewall/security-group rule — verified by scenario 0 of `docs/phase0-validation.md`.
 - No TLS/mTLS is implemented in this phase; the private-network boundary is the documented security perimeter.
 ## Directory layout
@@ -89,7 +92,7 @@ inferna-next/
 │       ├── main.py              # app + lifespan (gRPC task, DB seeding)
 │       ├── config.py            # INFERNA_* settings (pydantic-settings)
 │       ├── db.py, models.py, schemas.py, auth.py
-│       ├── api/                 # REST routers (/api/v1)
+│       ├── api/                 # REST routers (/api/v1) + gateway.py (/v1), keys.py
 │       ├── grpc_server.py       # WorkerService servicer
 │       ├── services/            # workers_svc, scheduler, metrics
 │       ├── proto/               # generated stubs (committed)

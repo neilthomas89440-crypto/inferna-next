@@ -22,6 +22,8 @@ listed at the end.
 - Tuning profiles per engine: **latency** and **throughput**
 - GPU vendor abstraction: **NVIDIA** (NVML), **AMD** (ROCm), **mock** (demo mode)
 - Authentication (JWT) + role-based access control (admin / user)
+- OpenAI-compatible inference gateway at `/v1` (chat completions, embeddings, audio
+  transcriptions, model list) authenticated with per-user API keys
 - Monitoring dashboards via Prometheus + **Grafana**
 - Everything runs in **Docker** (server, worker, frontend, monitoring, PostgreSQL)
 

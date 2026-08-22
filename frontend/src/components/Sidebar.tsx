@@ -6,6 +6,7 @@ const NAV_ITEMS = [
   { to: "/clusters", label: "Clusters", end: false },
   { to: "/models", label: "Models", end: false },
   { to: "/instances", label: "Instances", end: false },
+  { to: "/keys", label: "API Keys", end: false },
 ];
 
 export default function Sidebar() {
