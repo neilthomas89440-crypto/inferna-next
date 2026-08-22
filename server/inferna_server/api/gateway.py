@@ -77,7 +77,9 @@ def openai_error(
     )
 
 
-async def openai_error_handler(request: Request, exc: OpenAIError) -> JSONResponse:
+async def openai_error_handler(request: Request, exc: Exception) -> JSONResponse:
+    if not isinstance(exc, OpenAIError):
+        raise exc
     return openai_error(exc.status_code, exc.message, exc.type_, exc.code, headers=exc.headers)
 
 
