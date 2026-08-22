@@ -44,6 +44,28 @@ class PasswordChange(BaseModel):
     password: str = Field(min_length=6, max_length=128)
 
 
+# --- api keys ---
+
+
+class ApiKeyOut(ORMModel):
+    id: uuid.UUID
+    user_id: uuid.UUID
+    name: str
+    scopes: list[str] = []
+    created_at: datetime
+    updated_at: datetime
+    last_used_at: datetime | None
+    revoked_at: datetime | None
+
+
+class ApiKeyCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+
+
+class ApiKeySecretOut(ApiKeyOut):
+    key: str  # plaintext, returned exactly once on creation
+
+
 # --- clusters / workers ---
 
 

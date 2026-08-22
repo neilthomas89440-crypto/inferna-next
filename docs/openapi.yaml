@@ -147,6 +147,79 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/keys:
+    get:
+      tags:
+      - keys
+      summary: List Keys
+      operationId: list_keys_api_v1_keys_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/ApiKeyOut'
+                type: array
+                title: Response List Keys Api V1 Keys Get
+      security:
+      - OAuth2PasswordBearer: []
+    post:
+      tags:
+      - keys
+      summary: Create Key
+      operationId: create_key_api_v1_keys_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApiKeyCreate'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKeySecretOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      security:
+      - OAuth2PasswordBearer: []
+  /api/v1/keys/{key_id}/revoke:
+    post:
+      tags:
+      - keys
+      summary: Revoke Key
+      operationId: revoke_key_api_v1_keys__key_id__revoke_post
+      security:
+      - OAuth2PasswordBearer: []
+      parameters:
+      - name: key_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Key Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKeyOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /api/v1/clusters:
     get:
       tags:
@@ -481,6 +554,62 @@ paths:
                 title: Response Compatibility Api V1 Compatibility Get
       security:
       - OAuth2PasswordBearer: []
+  /v1/chat/completions:
+    post:
+      tags:
+      - gateway
+      summary: Chat Completions
+      operationId: chat_completions_v1_chat_completions_post
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+      security:
+      - HTTPBearer: []
+  /v1/embeddings:
+    post:
+      tags:
+      - gateway
+      summary: Embeddings
+      operationId: embeddings_v1_embeddings_post
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+      security:
+      - HTTPBearer: []
+  /v1/audio/transcriptions:
+    post:
+      tags:
+      - gateway
+      summary: Audio Transcriptions
+      operationId: audio_transcriptions_v1_audio_transcriptions_post
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+      security:
+      - HTTPBearer: []
+  /v1/models:
+    get:
+      tags:
+      - gateway
+      summary: List Models
+      operationId: list_models_v1_models_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+      security:
+      - HTTPBearer: []
   /healthz:
     get:
       summary: Healthz
@@ -507,6 +636,119 @@ paths:
               schema: {}
 components:
   schemas:
+    ApiKeyCreate:
+      properties:
+        name:
+          type: string
+          maxLength: 64
+          minLength: 1
+          title: Name
+      type: object
+      required:
+      - name
+      title: ApiKeyCreate
+    ApiKeyOut:
+      properties:
+        id:
+          type: string
+          format: uuid
+          title: Id
+        user_id:
+          type: string
+          format: uuid
+          title: User Id
+        name:
+          type: string
+          title: Name
+        scopes:
+          items:
+            type: string
+          type: array
+          title: Scopes
+          default: []
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+        updated_at:
+          type: string
+          format: date-time
+          title: Updated At
+        last_used_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Last Used At
+        revoked_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Revoked At
+      type: object
+      required:
+      - id
+      - user_id
+      - name
+      - created_at
+      - updated_at
+      - last_used_at
+      - revoked_at
+      title: ApiKeyOut
+    ApiKeySecretOut:
+      properties:
+        id:
+          type: string
+          format: uuid
+          title: Id
+        user_id:
+          type: string
+          format: uuid
+          title: User Id
+        name:
+          type: string
+          title: Name
+        scopes:
+          items:
+            type: string
+          type: array
+          title: Scopes
+          default: []
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+        updated_at:
+          type: string
+          format: date-time
+          title: Updated At
+        last_used_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Last Used At
+        revoked_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Revoked At
+        key:
+          type: string
+          title: Key
+      type: object
+      required:
+      - id
+      - user_id
+      - name
+      - created_at
+      - updated_at
+      - last_used_at
+      - revoked_at
+      - key
+      title: ApiKeySecretOut
     ClusterCreate:
       properties:
         name:
@@ -1021,3 +1263,6 @@ components:
         password:
           scopes: {}
           tokenUrl: /api/v1/auth/login
+    HTTPBearer:
+      type: http
+      scheme: bearer

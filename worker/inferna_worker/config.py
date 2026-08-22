@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     vllm_image: str = "vllm/vllm-openai:v0.8.5"
     sglang_image: str = "lmsysorg/sglang:v0.4.6.post1"
     hf_token: str = ""
+    worker_address: str = ""
     log_level: str = "info"
 
     @model_validator(mode="after")

@@ -27,8 +27,8 @@ async def test_concurrent_vram_allocation_serialized():
             await seed_catalog(db)
             await db.commit()
             cluster = (await db.execute(select(Cluster).where(Cluster.name == "default"))).scalar_one()
+
             from inferna_server.services.workers_svc import sha256_hex
-            import uuid as _uuid
 
             # Single GPU with 4096 MB — fits exactly 2×2048 MB models
             worker = Worker(
@@ -59,6 +59,7 @@ async def test_concurrent_vram_allocation_serialized():
 
             # 5 concurrent allocate+create — only 2 should succeed, 3 should get 400
             import asyncio
+
             from fastapi import HTTPException
 
             from inferna_server.models import ModelInstance

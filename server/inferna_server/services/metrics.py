@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from collections import Counter
 
-from prometheus_client import Gauge
+from prometheus_client import Counter as PrometheusCounter
+from prometheus_client import Gauge, Histogram
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,6 +25,18 @@ inferna_gpu_utilization_pct = Gauge(
     "inferna_gpu_utilization_pct", "GPU utilization % per device", ["worker", "index"]
 )
 inferna_instances_total = Gauge("inferna_instances_total", "Instances by state", ["state"])
+
+# Gateway metrics (counters/histograms; deliberately NOT in _ALL_GAUGES —
+# refresh_gauges must never clear them).
+inferna_requests = PrometheusCounter(
+    "inferna_requests", "Gateway requests by model and status", ["model", "status"]
+)  # prometheus_client appends `_total` -> exposed series is `inferna_requests_total`
+inferna_request_duration_seconds = Histogram(
+    "inferna_request_duration_seconds", "Time to upstream response headers", ["model"]
+)
+inferna_tokens = PrometheusCounter(
+    "inferna_tokens", "Tokens served by kind", ["model", "kind"]  # kind: prompt | completion
+)  # exposed as `inferna_tokens_total`
 
 _ALL_GAUGES = (
     inferna_workers_online,

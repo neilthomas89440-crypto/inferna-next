@@ -11,10 +11,16 @@ from inferna_server.api import (
     clusters as clusters_api,
 )
 from inferna_server.api import (
+    compatibility as compatibility_api,
+)
+from inferna_server.api import (
     dashboard as dashboard_api,
 )
 from inferna_server.api import (
     instances as instances_api,
+)
+from inferna_server.api import (
+    keys as keys_api,
 )
 from inferna_server.api import (
     models as models_api,
@@ -25,13 +31,11 @@ from inferna_server.api import (
 from inferna_server.api import (
     workers as workers_api,
 )
-from inferna_server.api import (
-    compatibility as compatibility_api,
-)
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(auth_api.router)
 api_router.include_router(users_api.router)
+api_router.include_router(keys_api.router)
 api_router.include_router(clusters_api.router)
 api_router.include_router(workers_api.router)
 api_router.include_router(models_api.router)

@@ -23,7 +23,7 @@ class WorkerService(cluster_pb2_grpc.WorkerServiceServicer):
                 return await workers_svc.register_worker(db, request)
         except grpc.RpcError as exc:
             await context.abort(exc.code(), exc.details() or "register failed")
-        except Exception as exc:  # noqa: BLE001
+        except Exception:  # noqa: BLE001
             logger.exception("register failed")
             await context.abort(grpc.StatusCode.INTERNAL, "internal error")
 
@@ -35,7 +35,7 @@ class WorkerService(cluster_pb2_grpc.WorkerServiceServicer):
             return response
         except grpc.RpcError as exc:
             await context.abort(exc.code(), exc.details() or "sync failed")
-        except Exception as exc:  # noqa: BLE001
+        except Exception:  # noqa: BLE001
             logger.exception("sync failed")
             await context.abort(grpc.StatusCode.INTERNAL, "internal error")
 

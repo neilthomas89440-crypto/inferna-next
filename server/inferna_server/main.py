@@ -6,6 +6,7 @@ import asyncio
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
+import httpx
 import structlog
 from alembic.config import Config
 from alembic.script import ScriptDirectory
@@ -14,9 +15,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from prometheus_fastapi_instrumentator import Instrumentator
 from sqlalchemy import select, text
-from sqlalchemy.exc import OperationalError
 
 from inferna_server.api import api_router
+from inferna_server.api import gateway as gateway_api
+from inferna_server.api.gateway import OpenAIError, openai_error_handler
 from inferna_server.auth import hash_password
 from inferna_server.config import get_settings
 from inferna_server.db import SessionLocal
@@ -97,16 +99,26 @@ async def lifespan(app: FastAPI):
     readiness_task = asyncio.create_task(readiness_loop(app))
     app.state.grpc_task = grpc_task
     app.state.readiness_task = readiness_task
-    logger.info("startup complete", grpc_port=get_settings().grpc_port)
+    settings = get_settings()
+    app.state.gateway_client = httpx.AsyncClient(
+        timeout=httpx.Timeout(
+            connect=settings.gateway_connect_timeout, read=settings.gateway_read_timeout
+        )
+    )
+    logger.info("startup complete", grpc_port=settings.grpc_port)
     try:
         yield
     finally:
+        gateway_client = getattr(app.state, "gateway_client", None)
+        if gateway_client is not None:
+            with suppress(Exception):  # noqa: BLE001
+                await gateway_client.aclose()
         for t in (grpc_task, readiness_task):
             t.cancel()
             with suppress(asyncio.CancelledError):
                 try:
                     await asyncio.wait_for(t, timeout=5)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     pass
                 except asyncio.CancelledError:
                     pass
@@ -146,6 +158,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(api_router)
+app.include_router(gateway_api.router)
+app.add_exception_handler(OpenAIError, openai_error_handler)
 Instrumentator().instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
 
 

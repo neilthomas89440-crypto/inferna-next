@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:5173,http://localhost:8080"
     instance_port_range_start: int = 8010
     instance_port_range_end: int = 8100
+    gateway_connect_timeout: float = 5.0
+    gateway_read_timeout: float = 300.0
     log_level: str = "info"
 
     @model_validator(mode="after")

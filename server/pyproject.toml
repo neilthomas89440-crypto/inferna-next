@@ -20,13 +20,13 @@ dependencies = [
     "python-multipart",
     "prometheus-fastapi-instrumentator",
     "PyYAML",
+    "httpx",
 ]
 
 [dependency-groups]
 dev = [
     "pytest",
     "pytest-asyncio",
-    "httpx",
     "ruff",
     "pyright",
     "grpcio-tools",

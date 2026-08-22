@@ -79,6 +79,7 @@ async def run_loop(settings, manager: InstanceManager) -> None:
                         cluster_name=settings.cluster_name,
                         version=VERSION,
                         protocol_version=PROTOCOL_VERSION,
+                        address=settings.worker_address or "",
                     )
                 )
                 worker_id = response.worker_id

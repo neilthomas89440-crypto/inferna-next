@@ -8,7 +8,7 @@ import grpc
 import pytest
 from sqlalchemy import select
 
-from inferna_server.models import Cluster, Model, ModelInstance
+from inferna_server.models import Cluster, Model, ModelInstance, Worker
 from inferna_server.proto import cluster_pb2
 from inferna_server.services.workers_svc import mark_disconnected, register_worker, sync_worker
 
@@ -22,6 +22,7 @@ def make_register(
     cluster_name: str = "default",
     version: str = "0.2.0",
     protocol_version: int = 1,
+    address: str = "",
 ) -> cluster_pb2.RegisterRequest:
     return cluster_pb2.RegisterRequest(
         cluster_token=token,
@@ -30,6 +31,7 @@ def make_register(
         cluster_name=cluster_name,
         version=version,
         protocol_version=protocol_version,
+        address=address,
     )
 
 
@@ -106,7 +108,6 @@ async def test_register_returns_id_token_interval(db) -> None:
     assert resp.worker_id
     assert resp.worker_token
     assert resp.sync_interval_seconds == 5
-    from sqlalchemy import select as ssel
 
     worker = (await db.execute(select(ModelInstance))).scalar_one_or_none()
     # check worker persisted
@@ -121,6 +122,30 @@ async def test_register_reuses_worker_by_hostname_and_rotates_token(db) -> None:
     second = await register_worker(db, make_register())
     assert first.worker_id == second.worker_id
     assert first.worker_token != second.worker_token
+
+
+async def test_register_persists_address(db) -> None:
+    resp = await register_worker(db, make_register(address="10.0.0.5"))
+    worker = (
+        await db.execute(select(Worker).where(Worker.id == uuid.UUID(resp.worker_id)))
+    ).scalar_one()
+    assert worker.address == "10.0.0.5"
+
+    resp2 = await register_worker(db, make_register(hostname="h2", address="   "))
+    worker2 = (
+        await db.execute(select(Worker).where(Worker.id == uuid.UUID(resp2.worker_id)))
+    ).scalar_one()
+    assert worker2.address is None
+
+
+async def test_register_updates_address_on_reuse(db) -> None:
+    first = await register_worker(db, make_register(address="10.0.0.5"))
+    second = await register_worker(db, make_register(address="10.0.0.9"))
+    assert first.worker_id == second.worker_id
+    worker = (
+        await db.execute(select(Worker).where(Worker.id == uuid.UUID(second.worker_id)))
+    ).scalar_one()
+    assert worker.address == "10.0.0.9"
 
 
 async def test_sync_wrong_token_rejected(db) -> None:

@@ -14,6 +14,7 @@ message RegisterRequest {
   string cluster_name = 4;    // optional; empty = "default"
   string version = 5;
   int32 protocol_version = 6;
+  string address = 7;   // optional routable address for the inference gateway; empty = server falls back to hostname
 }
 
 message RegisterResponse {
