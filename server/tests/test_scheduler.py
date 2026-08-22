@@ -201,7 +201,7 @@ async def test_port_unique_constraint(db) -> None:
 
 async def test_sequential_deploy_different_ports(client, db) -> None:
     # Use API level to check sequential deploys get different ports
-    from tests.conftest import TEST_ADMIN, login, auth_headers
+    from tests.conftest import TEST_ADMIN, auth_headers, login
 
     # Ensure worker exists
     cluster = await _default_cluster(db)

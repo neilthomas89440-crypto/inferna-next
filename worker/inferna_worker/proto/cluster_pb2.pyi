@@ -7,20 +7,22 @@ from typing import ClassVar as _ClassVar, Optional as _Optional, Union as _Union
 DESCRIPTOR: _descriptor.FileDescriptor
 
 class RegisterRequest(_message.Message):
-    __slots__ = ("cluster_token", "hostname", "worker_name", "cluster_name", "version", "protocol_version")
+    __slots__ = ("cluster_token", "hostname", "worker_name", "cluster_name", "version", "protocol_version", "address")
     CLUSTER_TOKEN_FIELD_NUMBER: _ClassVar[int]
     HOSTNAME_FIELD_NUMBER: _ClassVar[int]
     WORKER_NAME_FIELD_NUMBER: _ClassVar[int]
     CLUSTER_NAME_FIELD_NUMBER: _ClassVar[int]
     VERSION_FIELD_NUMBER: _ClassVar[int]
     PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
+    ADDRESS_FIELD_NUMBER: _ClassVar[int]
     cluster_token: str
     hostname: str
     worker_name: str
     cluster_name: str
     version: str
     protocol_version: int
-    def __init__(self, cluster_token: _Optional[str] = ..., hostname: _Optional[str] = ..., worker_name: _Optional[str] = ..., cluster_name: _Optional[str] = ..., version: _Optional[str] = ..., protocol_version: _Optional[int] = ...) -> None: ...
+    address: str
+    def __init__(self, cluster_token: _Optional[str] = ..., hostname: _Optional[str] = ..., worker_name: _Optional[str] = ..., cluster_name: _Optional[str] = ..., version: _Optional[str] = ..., protocol_version: _Optional[int] = ..., address: _Optional[str] = ...) -> None: ...
 
 class RegisterResponse(_message.Message):
     __slots__ = ("worker_id", "worker_token", "sync_interval_seconds")

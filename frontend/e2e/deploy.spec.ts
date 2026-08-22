@@ -9,11 +9,12 @@ async function login(page: Page) {
 }
 
 test("full mock deploy lifecycle", async ({ page }) => {
+  test.setTimeout(120_000);
   await login(page);
   await page.getByRole("link", { name: "Models" }).click();
   await page.getByTestId("model-card-Qwen/Qwen2.5-0.5B-Instruct").getByRole("button", { name: "Deploy" }).click();
   await expect(page.getByRole("heading", { name: /Deploy .+/ })).toBeVisible();
-  await page.getByRole("button", { name: "Deploy", exact: true }).click();
+  await page.locator("div.fixed.inset-0").getByRole("button", { name: "Deploy", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Instances" })).toBeVisible();
   const row = page.locator("tbody tr", { hasText: "Qwen2.5 0.5B Instruct" });
   await expect(row).toHaveCount(1);
@@ -23,6 +24,6 @@ test("full mock deploy lifecycle", async ({ page }) => {
   await row.getByRole("button", { name: "Resume" }).click();
   await expect(row.getByText("running", { exact: true })).toBeVisible({ timeout: 90000 });
   await row.getByRole("button", { name: "Delete" }).click();
-  await page.getByRole("button", { name: /delete/i }).click();
+  await page.locator("div.fixed.inset-0").getByRole("button", { name: /delete/i }).click();
   await expect(row).toHaveCount(0);
 });

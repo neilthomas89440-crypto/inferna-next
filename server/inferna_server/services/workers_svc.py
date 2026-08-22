@@ -100,6 +100,7 @@ async def register_worker(
             state="connected",
             token_hash=sha256_hex(token),
             version=request.version or None,
+            address=request.address.strip() or None,
             last_seen_at=utcnow(),
         )
         db.add(worker)
@@ -108,6 +109,7 @@ async def register_worker(
         worker.token_hash = sha256_hex(token)
         worker.state = "connected"
         worker.last_seen_at = utcnow()
+        worker.address = request.address.strip() or None
         if request.worker_name:
             worker.name = request.worker_name
         if request.version:
