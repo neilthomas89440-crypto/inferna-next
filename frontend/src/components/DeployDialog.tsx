@@ -230,7 +230,9 @@ export default function DeployDialog({ model, onClose }: DeployDialogProps) {
             </button>
             <button
               type="submit"
-              disabled={deploy.isPending || model.supported_engines.length === 0}
+              disabled={
+                deploy.isPending || model.supported_engines.length === 0 || !clusterId || !engine
+              }
               className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
             >
               {deploy.isPending ? "Deploying…" : "Deploy"}
