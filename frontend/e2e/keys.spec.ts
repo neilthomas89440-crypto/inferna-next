@@ -17,7 +17,8 @@ test("create and revoke an API key", async ({ page }) => {
 
   // Key shown exactly once, with the inf- prefix.
   await expect(page.getByText("Store this key now — it will not be shown again.")).toBeVisible();
-  const keyText = await page.locator("code").first().textContent();
+  // Modal root is the first fixed overlay; the table below also has <code> cells.
+  const keyText = await page.locator("div.fixed.inset-0").locator("code").first().textContent();
   expect(keyText).toMatch(/^inf-[0-9a-f]{32}$/);
   await page.getByRole("button", { name: "Done" }).click();
 

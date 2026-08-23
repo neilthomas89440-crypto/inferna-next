@@ -43,7 +43,7 @@
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
       "id": 3,
       "options": { "legend": { "calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
-      "targets": [{ "expr": "histogram_quantile(0.50, sum by (le) (rate(inferna_request_duration_seconds_bucket[5m])))", "legendFormat": "p50", "refId": "A" }],
+      "targets": [{ "expr": "histogram_quantile(0.50, sum by (le) (rate(inferna_time_to_first_byte_seconds_bucket[5m])))", "legendFormat": "p50", "refId": "A" }],
       "title": "Latency p50",
       "type": "timeseries"
     },
@@ -56,7 +56,7 @@
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
       "id": 4,
       "options": { "legend": { "calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
-      "targets": [{ "expr": "histogram_quantile(0.95, sum by (le) (rate(inferna_request_duration_seconds_bucket[5m])))", "legendFormat": "p95", "refId": "A" }],
+      "targets": [{ "expr": "histogram_quantile(0.95, sum by (le) (rate(inferna_time_to_first_byte_seconds_bucket[5m])))", "legendFormat": "p95", "refId": "A" }],
       "title": "Latency p95",
       "type": "timeseries"
     },

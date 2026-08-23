@@ -346,7 +346,7 @@ async def test_metrics_recorded(client, gateway, db) -> None:
     )
     assert (
         REGISTRY.get_sample_value(
-            "inferna_request_duration_seconds_count", {"model": "metric-model"}
+            "inferna_time_to_first_byte_seconds_count", {"model": "metric-model"}
         )
         == 1
     )

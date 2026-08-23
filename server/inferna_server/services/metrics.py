@@ -31,8 +31,10 @@ inferna_instances_total = Gauge("inferna_instances_total", "Instances by state",
 inferna_requests = PrometheusCounter(
     "inferna_requests", "Gateway requests by model and status", ["model", "status"]
 )  # prometheus_client appends `_total` -> exposed series is `inferna_requests_total`
-inferna_request_duration_seconds = Histogram(
-    "inferna_request_duration_seconds", "Time to upstream response headers", ["model"]
+inferna_time_to_first_byte_seconds = Histogram(
+    "inferna_time_to_first_byte_seconds",
+    "Time to upstream response headers (TTFB for streamed responses)",
+    ["model"],
 )
 inferna_tokens = PrometheusCounter(
     "inferna_tokens", "Tokens served by kind", ["model", "kind"]  # kind: prompt | completion

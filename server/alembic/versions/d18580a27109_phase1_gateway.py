@@ -5,10 +5,14 @@ Revises: d88ae166a92a
 Create Date: 2026-08-22 07:19:43.873066
 
 """
+import logging
 from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.exc import OperationalError
+
+log = logging.getLogger("alembic")
 
 
 # revision identifiers, used by Alembic.
@@ -22,7 +26,8 @@ def _add_address_column() -> None:
     """workers.address: nullable column; SQLite recreates the table (batch)."""
     try:
         op.add_column('workers', sa.Column('address', sa.String(length=255), nullable=True))
-    except Exception:
+    except (NotImplementedError, OperationalError) as exc:
+        log.warning("workers.address add_column unsupported in-place, batching: %s", exc)
         with op.batch_alter_table('workers') as batch_op:
             batch_op.add_column(sa.Column('address', sa.String(length=255), nullable=True))
 
@@ -31,7 +36,8 @@ def _drop_address_column() -> None:
     """workers.address: SQLite cannot drop columns in place — batch recreate."""
     try:
         op.drop_column('workers', 'address')
-    except Exception:
+    except (NotImplementedError, OperationalError) as exc:
+        log.warning("workers.address drop_column unsupported in-place, batching: %s", exc)
         with op.batch_alter_table('workers') as batch_op:
             batch_op.drop_column('address')
 

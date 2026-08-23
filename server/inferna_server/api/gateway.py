@@ -27,8 +27,8 @@ from inferna_server.models import (
     utcnow,
 )
 from inferna_server.services.metrics import (
-    inferna_request_duration_seconds,
     inferna_requests,
+    inferna_time_to_first_byte_seconds,
     inferna_tokens,
 )
 from inferna_server.services.workers_svc import sha256_hex
@@ -40,6 +40,8 @@ router = APIRouter(prefix="/v1", tags=["gateway"])
 _USAGE_RE = re.compile(r'"usage"\s*:\s*\{[^}]*\}')
 _PROMPT_TOKENS_RE = re.compile(r'"prompt_tokens"\s*:\s*(\d+)')
 _COMPLETION_TOKENS_RE = re.compile(r'"completion_tokens"\s*:\s*(\d+)')
+# How often a key's last_used_at is stamped; avoids a DB write on every request.
+LAST_USED_UPDATE_SECONDS = 60
 
 _DEFAULT_CLIENT: httpx.AsyncClient | None = None
 
@@ -113,9 +115,13 @@ async def get_api_key(
         raise OpenAIError(
             403, "API key lacks inference scope", "invalid_request_error", "insufficient_scope"
         )
-    key.last_used_at = utcnow()
-    # Commit before any streaming so this write is never blocked behind a long-lived stream.
-    await db.commit()
+    # Best-effort usage stamp: at most once per minute, never on the per-request hot path.
+    if key.last_used_at is None or (
+        utcnow() - key.last_used_at
+    ).total_seconds() >= LAST_USED_UPDATE_SECONDS:
+        key.last_used_at = utcnow()
+        # Commit before any streaming so this write is never blocked behind a long-lived stream.
+        await db.commit()
     return key
 
 
@@ -260,6 +266,8 @@ async def _resolve_target(
             "invalid_request_error",
             "model_not_found",
         )
+    # Worker engines expose the OpenAI-compatible surface under /v1 (vLLM/SGLang),
+    # so the gateway forwards the client path including its /v1 prefix unchanged.
     target = (
         f"http://{instance.worker.address or instance.worker.hostname}:"
         f"{instance.port}{request.url.path}"
@@ -359,7 +367,7 @@ async def _proxy(
         )
         raise OpenAIError(502, "upstream unreachable", "api_error", "upstream_error") from exc
 
-    inferna_request_duration_seconds.labels(model_name).observe(time.monotonic() - started)
+    inferna_time_to_first_byte_seconds.labels(model_name).observe(time.monotonic() - started)
     inferna_requests.labels(model=model_name, status=str(resp.status_code)).inc()
 
     return StreamingResponse(
