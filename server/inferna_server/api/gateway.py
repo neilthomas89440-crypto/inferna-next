@@ -324,7 +324,8 @@ async def _proxy(
     content_type = request.headers.get("content-type", "").lower()
     if content_type.startswith("application/json"):
         try:
-            stream = bool(json.loads(raw_body).get("stream"))
+            payload = json.loads(raw_body)
+            stream = bool(payload.get("stream")) if isinstance(payload, dict) else False
         except (json.JSONDecodeError, UnicodeDecodeError):
             stream = False
 
@@ -335,21 +336,26 @@ async def _proxy(
     client = get_gateway_client(request.app)
     settings = get_settings()
     target, instance, model = await _resolve_target(db, model_name, request)
-    req = client.build_request(
-        request.method,
-        target,
-        content=raw_body or None,
-        headers=forwarded_headers,
-        # httpx 0.28 dropped send(timeout=); per-request timeouts go through build_request.
-        timeout=httpx.Timeout(
-            None if stream else settings.gateway_read_timeout,
-            connect=settings.gateway_connect_timeout,
-        ),
-    )
     started = time.monotonic()
     try:
+        req = client.build_request(
+            request.method,
+            target,
+            content=raw_body or None,
+            headers=forwarded_headers,
+            # httpx 0.28 dropped send(timeout=); per-request timeouts go through build_request.
+            timeout=httpx.Timeout(
+                None if stream else settings.gateway_read_timeout,
+                connect=settings.gateway_connect_timeout,
+            ),
+        )
         resp = await client.send(req, stream=True)
-    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException) as exc:
+    except (
+        httpx.ConnectError,
+        httpx.ConnectTimeout,
+        httpx.TimeoutException,
+        httpx.InvalidURL,
+    ) as exc:
         logger.warning(
             "gateway upstream unreachable", model=model_name, target=target, error=str(exc)
         )

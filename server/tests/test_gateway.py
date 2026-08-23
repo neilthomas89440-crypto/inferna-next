@@ -39,7 +39,9 @@ async def gateway(client, db):
     await mock.aclose()
 
 
-async def _seed_instance(db, name: str, display_name: str, port: int = 8010) -> Model:
+async def _seed_instance(
+    db, name: str, display_name: str, port: int = 8010, address: str = "127.0.0.1"
+) -> Model:
     """Create a model with one connected worker + one running instance."""
     cluster = (
         await db.execute(select(Cluster).where(Cluster.name == "default"))
@@ -60,7 +62,7 @@ async def _seed_instance(db, name: str, display_name: str, port: int = 8010) -> 
         hostname="unresolvable-host",
         state="connected",
         token_hash=sha256_hex("tok"),
-        address="127.0.0.1",
+        address=address,
     )
     db.add(worker)
     await db.flush()
@@ -225,6 +227,33 @@ async def test_octet_stream_model_from_query_proxied(client, gateway, db) -> Non
     )
     assert resp.status_code == 200
     assert gateway["url"] == "http://127.0.0.1:8010/v1/audio/transcriptions?model=audio-model"
+
+
+async def test_non_object_json_body_with_query_model_proxied(client, gateway, db) -> None:
+    """Valid JSON that is not an object must not crash the proxy (greptile P1)."""
+    _, key = await _admin_and_key(client)
+    await _seed_instance(db, "json-arr-model", "Json Arr Model")
+    resp = await client.post(
+        "/v1/chat/completions?model=json-arr-model",
+        headers=auth_headers(key),
+        json=[1, 2, 3],
+    )
+    assert resp.status_code == 200
+    assert resp.content == SSE_BODY
+    assert gateway["url"] == "http://127.0.0.1:8010/v1/chat/completions?model=json-arr-model"
+
+
+async def test_malformed_worker_address_502(client, gateway, db) -> None:
+    """A worker with an unparsable registered address yields upstream_error, not a 500."""
+    _, key = await _admin_and_key(client)
+    await _seed_instance(db, "bad-addr-model", "Bad Addr Model", address="127.0.0.1:notaport")
+    resp = await client.post(
+        "/v1/chat/completions",
+        headers=auth_headers(key),
+        json={"model": "bad-addr-model", "stream": True},
+    )
+    assert resp.status_code == 502
+    assert resp.json()["error"]["code"] == "upstream_error"
 
 
 async def test_multipart_model_extraction(client, gateway, db) -> None:
