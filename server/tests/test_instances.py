@@ -156,8 +156,9 @@ async def test_restart_from_stopped(client, db) -> None:
     # stop -> desired stopped gen 2
     await client.post(f"/api/v1/model-instances/{iid}/stop", headers=auth_headers(token))
     # Simulate worker reporting stopped state directly in DB (observed)
-    from inferna_server.models import ModelInstance
     import uuid
+
+    from inferna_server.models import ModelInstance
 
     inst = (await db.execute(select(ModelInstance).where(ModelInstance.id == uuid.UUID(iid)))).scalar_one()
     inst.state = "stopped"
@@ -180,8 +181,9 @@ async def test_restart_from_error(client, db) -> None:
         headers=auth_headers(token),
     )
     iid = created.json()["id"]
-    from inferna_server.models import ModelInstance
     import uuid
+
+    from inferna_server.models import ModelInstance
 
     inst = (await db.execute(select(ModelInstance).where(ModelInstance.id == uuid.UUID(iid)))).scalar_one()
     inst.state = "error"

@@ -106,7 +106,6 @@ async def test_register_returns_id_token_interval(db) -> None:
     assert resp.worker_id
     assert resp.worker_token
     assert resp.sync_interval_seconds == 5
-    from sqlalchemy import select as ssel
 
     worker = (await db.execute(select(ModelInstance))).scalar_one_or_none()
     # check worker persisted
@@ -164,7 +163,7 @@ async def test_worker_report_persists_running_state(db) -> None:
     worker_id, token = await _register(db)
     instance_id = await _deploy_scheduled(db, worker_id)
     # worker reports running with correct generation -> server persists observed state, no further commands
-    resp = await sync_worker(
+    await sync_worker(
         db, make_sync(worker_id, token, instances=[status(instance_id, "running", port=8010, generation=1)])
     )
     # First sync after deploy should still send start? No, because reported generation 1 matches desired 1, so no start needed now but instance state should be updated
@@ -183,7 +182,7 @@ async def test_no_duplicate_start_when_generation_matches(db) -> None:
     worker_id, token = await _register(db)
     instance_id = await _deploy_scheduled(db, worker_id)
     # report running with generation == desired -> 0 commands
-    resp = await sync_worker(
+    await sync_worker(
         db, make_sync(worker_id, token, instances=[status(instance_id, "running", port=8010, generation=1)])
     )
     # The first report already had applied==generation, but obs is running not stopped, so no start.

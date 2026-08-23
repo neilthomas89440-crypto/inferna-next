@@ -11,6 +11,9 @@ from inferna_server.api import (
     clusters as clusters_api,
 )
 from inferna_server.api import (
+    compatibility as compatibility_api,
+)
+from inferna_server.api import (
     dashboard as dashboard_api,
 )
 from inferna_server.api import (
@@ -24,9 +27,6 @@ from inferna_server.api import (
 )
 from inferna_server.api import (
     workers as workers_api,
-)
-from inferna_server.api import (
-    compatibility as compatibility_api,
 )
 
 api_router = APIRouter(prefix="/api/v1")

@@ -76,10 +76,16 @@ class InstanceManager:
         try:
             # Adopt managed containers
             try:
-                managed = self.docker.containers.list(all=True, filters={"label": f"{LABEL_MANAGED}=true"})
+                managed = self.docker.containers.list(
+                    all=True, filters={"label": f"{LABEL_MANAGED}=true"}
+                )
             except TypeError:
                 # FakeDocker may not support filters arg
-                managed = [c for c in self.docker.containers.list(all=True) if getattr(c, "labels", {}).get(LABEL_MANAGED) == "true"]
+                managed = [
+                    c
+                    for c in self.docker.containers.list(all=True)
+                    if getattr(c, "labels", {}).get(LABEL_MANAGED) == "true"
+                ]
             for container in managed:
                 try:
                     name = getattr(container, "name", "")
@@ -157,8 +163,10 @@ class InstanceManager:
                 try:
                     await asyncio.to_thread(self._apply_docker_command, command)
                 except Exception as exc:  # noqa: BLE001
-                    logger.exception("command failed", instance_id=command.instance_id, error=str(exc))
-                    try:
+                    logger.exception(
+                        "command failed", instance_id=command.instance_id, error=str(exc)
+                    )
+                    with suppress(Exception):
                         self._instances[command.instance_id] = {
                             "state": "error",
                             "port": command.config.port if command.HasField("config") else 0,
@@ -166,8 +174,6 @@ class InstanceManager:
                             "generation": command.generation,
                             "started_at": time.monotonic(),
                         }
-                    except Exception:
-                        pass
             await asyncio.to_thread(self._remove_stale_containers_sync)
             self._schedule_pending_probes()
         except Exception:  # noqa: BLE001
@@ -191,7 +197,7 @@ class InstanceManager:
         except Exception as exc:  # noqa: BLE001
             logger.exception("apply docker command failed", action=command.action, error=str(exc))
             # Convert to error state ensuring generation recorded
-            try:
+            with suppress(Exception):
                 self._instances[command.instance_id] = {
                     "state": "error",
                     "port": command.config.port if command.HasField("config") else 0,
@@ -199,8 +205,6 @@ class InstanceManager:
                     "generation": command.generation,
                     "started_at": time.monotonic(),
                 }
-            except Exception:
-                pass
 
     def _schedule_pending_probes(self) -> None:
         for instance_id, port in self._pending_probes:
@@ -238,12 +242,21 @@ class InstanceManager:
         config = command.config
         # Idempotency: skip if already starting/running with same or higher generation
         tracked = self._instances.get(instance_id)
-        if tracked is not None and tracked.get("state") in ("starting", "running") and tracked.get("generation", 0) >= command.generation:
+        if (
+            tracked is not None
+            and tracked.get("state") in ("starting", "running")
+            and tracked.get("generation", 0) >= command.generation
+        ):
             return
-        # If tracked exists with lower generation or stopped/error, remove old container before recreating
-        if tracked is not None and (tracked.get("generation", 0) < command.generation or tracked.get("state") in ("stopped", "error")):
+        # Lower generation or stopped/error: remove old container before recreating
+        if tracked is not None and (
+            tracked.get("generation", 0) < command.generation
+            or tracked.get("state") in ("stopped", "error")
+        ):
             try:
-                container = self.docker.containers.get(f"{CONTAINER_PREFIX}{instance_id}")
+                container = self.docker.containers.get(
+                    f"{CONTAINER_PREFIX}{instance_id}"
+                )
                 container.remove(force=True)
             except Exception:
                 pass
@@ -355,9 +368,15 @@ class InstanceManager:
         """Remove managed containers not in _instances (server-side deletes)."""
         try:
             try:
-                containers = self.docker.containers.list(all=True, filters={"label": f"{LABEL_MANAGED}=true"})
+                containers = self.docker.containers.list(
+                    all=True, filters={"label": f"{LABEL_MANAGED}=true"}
+                )
             except TypeError:
-                containers = [c for c in self.docker.containers.list(all=True) if getattr(c, "labels", {}).get(LABEL_MANAGED) == "true"]
+                containers = [
+                    c
+                    for c in self.docker.containers.list(all=True)
+                    if getattr(c, "labels", {}).get(LABEL_MANAGED) == "true"
+                ]
             for container in containers:
                 name = getattr(container, "name", "")
                 if not name.startswith(CONTAINER_PREFIX):
@@ -378,7 +397,9 @@ class InstanceManager:
             # Fast path: check if container exited
             if not self.mock:
                 try:
-                    container = await asyncio.to_thread(self.docker.containers.get, f"{CONTAINER_PREFIX}{instance_id}")
+                    container = await asyncio.to_thread(
+                        self.docker.containers.get, f"{CONTAINER_PREFIX}{instance_id}"
+                    )
                     c_status = getattr(container, "status", "")
                     if c_status in ("exited", "dead"):
                         info = self._instances.get(instance_id)
@@ -405,7 +426,9 @@ class InstanceManager:
             # second check after request
             if not self.mock:
                 try:
-                    container = await asyncio.to_thread(self.docker.containers.get, f"{CONTAINER_PREFIX}{instance_id}")
+                    container = await asyncio.to_thread(
+                        self.docker.containers.get, f"{CONTAINER_PREFIX}{instance_id}"
+                    )
                     c_status = getattr(container, "status", "")
                     if c_status in ("exited", "dead"):
                         info = self._instances.get(instance_id)

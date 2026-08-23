@@ -128,7 +128,8 @@ async def allocate_manual(
     for index in gpu_indexes:
         if gpus_by_index[index].vendor not in ENGINE_VENDORS.get(engine, set()):
             raise HTTPException(
-                status_code=400, detail=f"engine {engine} not supported on {gpus_by_index[index].vendor} GPU"
+                status_code=400,
+                detail=f"engine {engine} not supported on {gpus_by_index[index].vendor} GPU",
             )
 
     usage = _gpu_usage(await _vram_instances(db, worker.id))

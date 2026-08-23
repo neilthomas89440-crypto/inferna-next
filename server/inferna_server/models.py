@@ -184,7 +184,9 @@ class ModelInstance(Base, TimestampMixin):
     profile: Mapped[str] = mapped_column(String(16))  # latency | throughput
     gpu_indexes: Mapped[list[int]] = mapped_column(JSON)
     state: Mapped[str] = mapped_column(String(16), default="scheduled")
-    desired_state: Mapped[str] = mapped_column(String(16), default="running", server_default="running")
+    desired_state: Mapped[str] = mapped_column(
+        String(16), default="running", server_default="running"
+    )
     generation: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     port: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)

@@ -7,6 +7,7 @@ from __future__ import annotations
 # pyright: reportOptionalMemberAccess=false
 import asyncio
 import time
+from contextlib import suppress
 
 from inferna_worker.config import Settings
 from inferna_worker.engines.manager import CONTAINER_PREFIX, InstanceManager
@@ -262,10 +263,8 @@ async def test_reconcile_coalesces_into_pending() -> None:
     assert manager._pending["coal"].generation == 2
     await asyncio.sleep(1.2)
     if manager._batch_task is not None:
-        try:
+        with suppress(TimeoutError):
             await asyncio.wait_for(manager._batch_task, timeout=2)
-        except asyncio.TimeoutError:
-            pass
     assert manager._instances["coal"]["generation"] == 2
     await manager.shutdown()
 
@@ -286,10 +285,8 @@ async def test_restart_during_inflight_batch_recreates_once() -> None:
     await manager.reconcile([cmd2])
     await asyncio.sleep(1.2)
     if manager._batch_task is not None:
-        try:
+        with suppress(TimeoutError):
             await asyncio.wait_for(manager._batch_task, timeout=2)
-        except asyncio.TimeoutError:
-            pass
     assert manager._instances["batch"]["generation"] == 2
     containers = [c for c in manager._docker.containers.containers if c.name == f"{CONTAINER_PREFIX}batch" and not c.removed]
     assert len(containers) == 1
