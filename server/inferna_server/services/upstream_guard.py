@@ -146,85 +146,163 @@ def _extract_host(target: str) -> str:
     raise ValueError(f"invalid upstream target {target!r}: missing hostname")
 
 
-async def assert_upstream_allowed(target: str, settings: Settings) -> None:
-    """Raise ValueError if *target* is not allowed under current policy."""
+def _unwrap_ipv4_mapped(
+    ip: ipaddress.IPv4Address | ipaddress.IPv6Address,
+) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
+    """Return the embedded IPv4 for IPv4-mapped IPv6 addresses; else *ip*."""
+    try:
+        if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+            return ip.ipv4_mapped
+    except Exception:
+        pass
+    return ip
+
+
+def _ip_allowed_by_allowlist(
+    ip: ipaddress.IPv4Address | ipaddress.IPv6Address, allowlist: list[str]
+) -> bool:
+    """True if *ip* (already IPv4-mapped-unwrapped) matches a literal/CIDR entry."""
+    for entry in allowlist:
+        if "/" in entry:
+            try:
+                net = ipaddress.ip_network(entry, strict=False)
+            except ValueError:
+                continue
+            try:
+                if ip in net:
+                    return True
+            except TypeError:
+                # version mismatch (v4 vs v6)
+                continue
+        else:
+            try:
+                lit = ipaddress.ip_address(entry)
+            except ValueError:
+                continue
+            if ip == lit:
+                return True
+    return False
+
+
+def _prefer_ipv4(
+    ips: list[ipaddress.IPv4Address | ipaddress.IPv6Address],
+) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
+    """Prefer the first IPv4 address; fall back to the first address overall."""
+    for ip in ips:
+        if isinstance(ip, ipaddress.IPv4Address):
+            return ip
+    return ips[0]
+
+
+def _ip_to_pin(
+    ip: ipaddress.IPv4Address | ipaddress.IPv6Address,
+) -> str:
+    """Render an IP for a URL: bracketed for IPv6, plain for IPv4."""
+    if isinstance(ip, ipaddress.IPv6Address):
+        return f"[{ip}]"
+    return str(ip)
+
+
+async def resolve_and_validate(target: str, settings: Settings) -> str:
+    """Resolve *target*, enforce SSRF policy, and return a pinned connect address.
+
+    The returned string is either a concrete IP (IPv6 wrapped in ``[...]``) to
+    connect to, or — for the development / unresolvable-hostname-in-production
+    cases — the original hostname string, which the caller passes through
+    unchanged. Pinning the validated IP in the request URL prevents a
+    connect-time DNS re-resolution: the class of SSRF where a hostname resolves
+    to an allowed IP at check time but to a blocked IP at connect time.
+
+    Behaviour:
+    * Literal IP: checked directly against the allowlist (if set) or blocked
+      networks (production, empty allowlist). IPv4-mapped IPv6 is unwrapped.
+    * Allowlist set:
+        - exact hostname match (case-insensitive, trailing dot stripped) pins
+          the first resolved IP without further IP validation — the hostname is
+          the trust anchor;
+        - otherwise EVERY resolved IP must be allowlisted (not ANY): reject if
+          any is not; if unresolvable, reject.
+    * Allowlist empty + development: return first resolved IP, or the host if
+      DNS fails.
+    * Allowlist empty + production: reject if ANY resolved IP is blocked; else
+      return the first non-blocked IP; unresolvable hostnames are allowed (the
+      caller fails naturally at connect time).
+    """
     host = _extract_host(target)
     allowlist = settings.gateway_upstream_allowlist_entries
 
+    # Literal-IP fast path (also unwraps IPv4-mapped IPv6).
+    try:
+        literal_ip = ipaddress.ip_address(host)
+    except ValueError:
+        literal_ip = None
+    if literal_ip is not None:
+        ip = _unwrap_ipv4_mapped(literal_ip)
+        if allowlist:
+            if _ip_allowed_by_allowlist(ip, allowlist):
+                return _ip_to_pin(ip)
+            raise ValueError(f"upstream target {host!r} not in allowlist")
+        if settings.environment == "development":
+            return _ip_to_pin(ip)
+        if _ip_is_blocked(ip):
+            raise ValueError(f"upstream target {host!r} resolves to blocked address {ip}")
+        return _ip_to_pin(ip)
+
+    # Hostname (non-literal) path.
     if allowlist:
         host_norm = host.lower().rstrip(".")
-        # 1) exact hostname match (entries that are hostnames)
+        # 1) exact hostname allowlist match → trust the hostname; pin first IP.
         for entry in allowlist:
             if "/" in entry:
                 continue
             try:
                 ipaddress.ip_address(entry)
-                continue  # IP literal, not hostname
+                continue  # IP literal, not a hostname entry
             except ValueError:
                 pass
             if host_norm == entry.lower().rstrip("."):
-                return
-        # 2) IP / CIDR match via DNS
+                ips = await resolve_host_ips(host)
+                if ips:
+                    return _ip_to_pin(_prefer_ipv4(ips))
+                return host  # DNS failed: no IP to pin, pass host through
+        # 2) IP/CIDR match: EVERY resolved IP must be allowlisted.
         ips = await resolve_host_ips(host)
         if not ips:
-            try:
-                literal = ipaddress.ip_address(host)
-                ips = [literal]
-            except ValueError:
-                pass
-        for ip in ips:
-            check_ip: ipaddress.IPv4Address | ipaddress.IPv6Address = ip
-            try:
-                if isinstance(check_ip, ipaddress.IPv6Address) and check_ip.ipv4_mapped is not None:
-                    check_ip = check_ip.ipv4_mapped
-            except Exception:
-                pass
-            for entry in allowlist:
-                if "/" in entry:
-                    try:
-                        net = ipaddress.ip_network(entry, strict=False)
-                    except ValueError:
-                        continue
-                    try:
-                        if check_ip in net:
-                            return
-                    except TypeError:
-                        continue
-                else:
-                    try:
-                        lit = ipaddress.ip_address(entry)
-                    except ValueError:
-                        continue
-                    if check_ip == lit or ip == lit:
-                        return
-                    try:
-                        if (
-                            isinstance(ip, ipaddress.IPv6Address)
-                            and ip.ipv4_mapped is not None
-                            and ip.ipv4_mapped == lit
-                        ):
-                            return
-                    except Exception:
-                        pass
-        raise ValueError(f"upstream target {host!r} not in allowlist")
+            raise ValueError(f"upstream target {host!r} not in allowlist (unresolvable)")
+        for raw_ip in ips:
+            ip = _unwrap_ipv4_mapped(raw_ip)
+            if not _ip_allowed_by_allowlist(ip, allowlist):
+                raise ValueError(
+                    f"upstream target {host!r} resolves to non-allowlisted address {ip}"
+                )
+        return _ip_to_pin(_prefer_ipv4(ips))
 
-    # Empty allowlist
+    # Empty allowlist.
     if settings.environment == "development":
-        return
-    # production: reject if any resolved IP is blocked
+        ips = await resolve_host_ips(host)
+        if ips:
+            return _ip_to_pin(_prefer_ipv4(ips))
+        return host
+    # production: reject if ANY resolved IP is blocked.
     ips = await resolve_host_ips(host)
     if not ips:
-        try:
-            lit = ipaddress.ip_address(host)
-            if _ip_is_blocked(lit):
-                raise ValueError(f"upstream target {host!r} resolves to blocked address {lit}")
-            return
-        except ValueError:
-            return
-    for ip in ips:
+        # Unresolvable hostname with empty allowlist: allow (current behaviour);
+        # the caller fails naturally when the connection cannot be established.
+        return host
+    for raw_ip in ips:
+        ip = _unwrap_ipv4_mapped(raw_ip)
         if _ip_is_blocked(ip):
             raise ValueError(f"upstream target {host!r} resolves to blocked address {ip}")
-    return
+    return _ip_to_pin(_prefer_ipv4(ips))
+
+
+async def assert_upstream_allowed(target: str, settings: Settings) -> None:
+    """Raise ValueError if *target* is not allowed under current policy.
+
+    Legacy API kept for backward compatibility; delegates to
+    :func:`resolve_and_validate` (which raises on rejection).
+    """
+    await resolve_and_validate(target, settings)
 
 
 async def validate_worker_address(raw: str, settings: Settings) -> str:

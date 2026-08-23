@@ -34,7 +34,7 @@ from inferna_server.services.metrics import (
     inferna_time_to_first_byte_seconds,
     inferna_tokens,
 )
-from inferna_server.services.upstream_guard import assert_upstream_allowed
+from inferna_server.services.upstream_guard import _extract_host, resolve_and_validate
 from inferna_server.services.workers_svc import sha256_hex
 
 logger = structlog.get_logger(__name__)
@@ -46,6 +46,12 @@ _PROMPT_TOKENS_RE = re.compile(r'"prompt_tokens"\s*:\s*(\d+)')
 _COMPLETION_TOKENS_RE = re.compile(r'"completion_tokens"\s*:\s*(\d+)')
 # How often a key's last_used_at is stamped; avoids a DB write on every request.
 LAST_USED_UPDATE_SECONDS = 60
+# nginx caps the whole gateway at 100 MiB; enforce the same ceiling here so the
+# :8000 port (reachable directly, bypassing nginx) cannot be abused with an
+# unbounded request body. Audio transcription's contract is 100 MiB.
+MAX_BODY_SIZE = 100 * 1024 * 1024
+# JSON/text payloads (chat, embeddings) are far smaller in practice; cap tighter.
+MAX_JSON_BODY_SIZE = 10 * 1024 * 1024
 
 # Inferna API key format: inf- + 32 hex chars
 _gateway_bearer = HTTPBearer(
@@ -277,6 +283,39 @@ async def _extract_model(request: Request, raw_body: bytes) -> str:
     return model
 
 
+async def _read_body_limited(request: Request, limit: int = MAX_BODY_SIZE) -> bytes:
+    """Read the request body, rejecting oversized payloads with a 413.
+
+    Enforces ``Content-Length`` up front (no need to stream a known-too-large
+    body) and caps streaming reads at *limit* so a malicious client cannot
+    exhaust memory on the directly-reachable :8000 port. Works for JSON and
+    multipart/raw bodies alike; the returned bytes are forwarded upstream.
+    """
+    content_length = request.headers.get("content-length")
+    if content_length is not None:
+        try:
+            declared = int(content_length)
+        except ValueError:
+            declared = 0
+        if declared > limit:
+            raise OpenAIError(
+                413,
+                "request body too large",
+                "invalid_request_error",
+                "body_too_large",
+            )
+    body: bytearray = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > limit:
+            raise OpenAIError(
+                413,
+                "request body too large",
+                "invalid_request_error",
+                "body_too_large",
+            )
+    return bytes(body)
+
 async def _resolve_target(
     db: AsyncSession, model_name: str, request: Request
 ) -> tuple[str, ModelInstance, Model]:
@@ -313,7 +352,10 @@ async def _resolve_target(
         )
     raw_host = instance.worker.address or instance.worker.hostname
     try:
-        await assert_upstream_allowed(raw_host, get_settings())
+        # Pin the validated IP (or original hostname) so the upstream connection
+        # cannot re-resolve DNS at connect time — the SSRF hole where a host
+        # resolves to an allowed IP at check time but a blocked IP at connect.
+        validated = await resolve_and_validate(raw_host, get_settings())
     except ValueError as exc:
         logger.warning(
             "gateway upstream target blocked",
@@ -321,12 +363,15 @@ async def _resolve_target(
             host=raw_host,
             reason=str(exc),
         )
+        # SSRF-blocked 502s are raised here (before _proxy's counter), so record
+        # them; the app-level handler skips 502s to avoid double counting.
+        inferna_requests.labels(model=model_name, status="502").inc()
         raise OpenAIError(
             502, "upstream target not allowed", "api_error", "upstream_not_allowed"
         ) from exc
-    # Build target with scheme support
-    scheme_host = raw_host if "://" in raw_host else f"http://{raw_host}"
-    target = f"{scheme_host}:{instance.port}{request.url.path}"
+    # Build target from the pinned address (IP literal or original hostname).
+    scheme = raw_host.split("://", 1)[0].lower() if "://" in raw_host else "http"
+    target = f"{scheme}://{validated}:{instance.port}{request.url.path}"
     if request.url.query:
         target += f"?{request.url.query}"
     return target, instance, model
@@ -392,6 +437,13 @@ async def _proxy(
     client = get_gateway_client(request.app)
     settings = get_settings()
     target, instance, model = await _resolve_target(db, model_name, request)
+    # Preserve the original hostname in the Host header for virtual hosting, even
+    # though the connection target is now a pinned IP (prevents vhost mismatch).
+    raw_host = instance.worker.address or instance.worker.hostname
+    host_header = _extract_host(raw_host)
+    if ":" in host_header and not host_header.startswith("["):
+        host_header = f"[{host_header}]"  # bracket IPv6 literals for Host
+    forwarded_headers["host"] = f"{host_header}:{instance.port}"
     started: float | None = None
     try:
         req = client.build_request(
@@ -468,7 +520,7 @@ async def chat_completions(
     key: ApiKey = Depends(get_api_key),
     db: AsyncSession = Depends(get_db),
 ):
-    raw_body = await request.body()
+    raw_body = await _read_body_limited(request, MAX_JSON_BODY_SIZE)
     model_name = await _extract_model(request, raw_body)
     return await _proxy(request, raw_body, model_name, db)
 
@@ -479,7 +531,7 @@ async def embeddings(
     key: ApiKey = Depends(get_api_key),
     db: AsyncSession = Depends(get_db),
 ):
-    raw_body = await request.body()
+    raw_body = await _read_body_limited(request, MAX_JSON_BODY_SIZE)
     model_name = await _extract_model(request, raw_body)
     return await _proxy(request, raw_body, model_name, db)
 
@@ -490,7 +542,7 @@ async def audio_transcriptions(
     key: ApiKey = Depends(get_api_key),
     db: AsyncSession = Depends(get_db),
 ):
-    raw_body = await request.body()
+    raw_body = await _read_body_limited(request, MAX_BODY_SIZE)
     model_name = await _extract_model(request, raw_body)
     return await _proxy(request, raw_body, model_name, db)
 

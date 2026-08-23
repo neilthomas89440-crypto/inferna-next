@@ -20,7 +20,7 @@ dependencies = [
     "python-multipart",
     "prometheus-fastapi-instrumentator",
     "PyYAML",
-    "httpx",
+    "httpx>=0.28,<1",
 ]
 
 [dependency-groups]

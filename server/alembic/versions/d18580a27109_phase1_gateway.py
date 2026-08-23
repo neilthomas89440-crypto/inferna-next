@@ -55,8 +55,7 @@ def upgrade() -> None:
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
     sa.ForeignKeyConstraint(['user_id'], ['users.id'], ondelete='CASCADE'),
-    sa.PrimaryKeyConstraint('id'),
-    sa.UniqueConstraint('key_hash')
+    sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_api_keys_user_id'), 'api_keys', ['user_id'], unique=False)
     op.create_index(op.f('ix_api_keys_key_hash'), 'api_keys', ['key_hash'], unique=True)

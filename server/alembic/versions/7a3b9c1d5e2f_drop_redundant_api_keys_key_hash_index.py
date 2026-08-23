@@ -15,12 +15,20 @@ down_revision: Union[str, Sequence[str], None] = 'd18580a27109'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
+# NOTE: This migration previously dropped the unique index `ix_api_keys_key_hash`.
+# That index is NOT redundant: the ORM model (ApiKey.key_hash) declares
+# `unique=True, index=True`, which produces exactly one unique index and no
+# separate UniqueConstraint. Dropping it left the DB missing an index the ORM
+# expects, forcing Alembic check to re-add it. The d18580 migration has been
+# corrected to create only the unique index (no UniqueConstraint), so this
+# migration is now a no-op to avoid removing the needed index.
+
 
 def upgrade() -> None:
-    """Upgrade schema."""
-    op.drop_index(op.f('ix_api_keys_key_hash'), table_name='api_keys')
+    """No-op: unique index on api_keys.key_hash is required (see docstring)."""
+    pass
 
 
 def downgrade() -> None:
-    """Downgrade schema."""
-    op.create_index(op.f('ix_api_keys_key_hash'), 'api_keys', ['key_hash'], unique=True)
+    """No-op: see upgrade docstring."""
+    pass

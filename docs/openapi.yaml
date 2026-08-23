@@ -560,6 +560,24 @@ paths:
       - gateway
       summary: Chat Completions
       operationId: chat_completions_v1_chat_completions_post
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                model:
+                  type: string
+                messages:
+                  type: array
+                  items:
+                    type: object
+                stream:
+                  type: boolean
+              required:
+              - model
+              - messages
       responses:
         '200':
           description: Success (SSE stream when stream=true)
@@ -586,6 +604,22 @@ paths:
       - gateway
       summary: Embeddings
       operationId: embeddings_v1_embeddings_post
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                model:
+                  type: string
+                input:
+                  type: string
+                encoding_format:
+                  type: string
+              required:
+              - model
+              - input
       responses:
         '200':
           description: Success
@@ -612,6 +646,21 @@ paths:
       - gateway
       summary: Audio Transcriptions
       operationId: audio_transcriptions_v1_audio_transcriptions_post
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                model:
+                  type: string
+                file:
+                  type: string
+                  format: binary
+              required:
+              - model
+              - file
       responses:
         '200':
           description: Success

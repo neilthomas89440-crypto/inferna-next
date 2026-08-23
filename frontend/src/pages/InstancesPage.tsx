@@ -93,7 +93,11 @@ export default function InstancesPage() {
                   {inst.state === "running" ? (
                     <button
                       type="button"
-                      onClick={() => setEndpoint(inst)}
+                      onClick={() => {
+                        setCopiedTarget(null);
+                        setCopyError(null);
+                        setEndpoint(inst);
+                      }}
                       className="text-sm text-indigo-600 hover:underline"
                     >
                       Endpoint
@@ -173,7 +177,11 @@ export default function InstancesPage() {
                   </h2>
                   <button
                     type="button"
-                    onClick={() => setEndpoint(null)}
+                    onClick={() => {
+                      setEndpoint(null);
+                      setCopiedTarget(null);
+                      setCopyError(null);
+                    }}
                     className="text-sm text-slate-500 hover:text-slate-700"
                   >
                     Close

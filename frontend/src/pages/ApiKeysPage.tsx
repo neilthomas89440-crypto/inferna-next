@@ -22,8 +22,13 @@ export default function ApiKeysPage() {
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setError(null);
+    const trimmed = name.trim();
+    if (!trimmed) {
+      setError("Name required");
+      return;
+    }
     try {
-      const result = await createKey.mutateAsync({ name });
+      const result = await createKey.mutateAsync({ name: trimmed });
       setName("");
       setCreating(false);
       setCreated(result);
@@ -32,6 +37,17 @@ export default function ApiKeysPage() {
       setError(err instanceof Error ? err.message : "Create failed");
     }
   };
+
+  if (keys.isLoading) {
+    return <p className="text-slate-400">Loading API keys…</p>;
+  }
+  if (keys.isError || !keys.data) {
+    return (
+      <p className="text-red-600">
+        Failed to load API keys: {String(keys.error ?? "unknown error")}
+      </p>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -172,6 +188,7 @@ export default function ApiKeysPage() {
                 onClick={() => {
                   setCreated(null);
                   setCopyState("idle");
+                  createKey.reset();
                 }}
                 className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700"
               >
@@ -189,7 +206,11 @@ export default function ApiKeysPage() {
           confirmLabel="Revoke"
           busy={revokeKey.isPending}
           onConfirm={() => {
-            revokeKey.mutate(revoking, { onSettled: () => setRevoking(null) });
+            revokeKey.mutate(revoking, {
+              onSuccess: () => setRevoking(null),
+              onError: (err) =>
+                setError(err instanceof Error ? err.message : "Revoke failed"),
+            });
           }}
           onCancel={() => setRevoking(null)}
         />
