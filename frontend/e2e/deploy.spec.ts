@@ -15,6 +15,8 @@ test("full mock deploy lifecycle", async ({ page }) => {
   await page.getByTestId("model-card-Qwen/Qwen2.5-0.5B-Instruct").getByRole("button", { name: "Deploy" }).click();
   await expect(page.getByRole("heading", { name: /Deploy .+/ })).toBeVisible();
   await page.locator("div.fixed.inset-0").getByRole("button", { name: "Deploy", exact: true }).click();
+  // Deploy POST can take a while on a cold CI stack — wait for the navigation itself.
+  await expect(page).toHaveURL(/\/instances$/, { timeout: 30000 });
   await expect(page.getByRole("heading", { name: "Instances" })).toBeVisible();
   const row = page.locator("tbody tr", { hasText: "Qwen2.5 0.5B Instruct" });
   await expect(row).toHaveCount(1);
