@@ -482,7 +482,7 @@ requires-dist = [
     { name = "bcrypt" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "grpcio" },
-    { name = "httpx" },
+    { name = "httpx", specifier = ">=0.28,<1" },
     { name = "prometheus-client" },
     { name = "prometheus-fastapi-instrumentator" },
     { name = "pydantic" },
