@@ -33,9 +33,11 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _check_production_secrets(self):
-        if self.environment == "production":
-            if self.registration_token == "inferna-registration-token":
-                raise ValueError("production mode requires a non-default INFERNA_REGISTRATION_TOKEN")
+        if (
+            self.environment == "production"
+            and self.registration_token == "inferna-registration-token"
+        ):
+            raise ValueError("production mode requires a non-default INFERNA_REGISTRATION_TOKEN")
         return self
 
 

@@ -44,7 +44,9 @@ class Settings(BaseSettings):
             if self.registration_token == "inferna-registration-token":
                 problems.append("INFERNA_REGISTRATION_TOKEN")
             if problems:
-                raise ValueError(f"production mode requires non-default values for: {', '.join(problems)}")
+                raise ValueError(
+                    f"production mode requires non-default values for: {', '.join(problems)}"
+                )
         return self
 
     @property

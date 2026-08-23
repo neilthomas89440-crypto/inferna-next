@@ -52,7 +52,8 @@ async def deploy(
         raise HTTPException(status_code=404, detail="cluster not found")
     if body.engine not in (model.supported_engines or []):
         raise HTTPException(
-            status_code=400, detail=f"engine '{body.engine}' does not support category '{model.category}'"
+            status_code=400,
+            detail=f"engine '{body.engine}' does not support category '{model.category}'",
         )
 
     try:

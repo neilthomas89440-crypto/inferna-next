@@ -47,7 +47,10 @@ async def _check_schema() -> None:
     except Exception as exc:  # noqa: BLE001
         raise RuntimeError(f"failed to read alembic heads: {exc}") from exc
     if current not in heads:
-        raise RuntimeError(f"database schema {current} is not up to date (heads: {heads}) — run `alembic upgrade head`")
+        raise RuntimeError(
+            f"database schema {current} is not up to date (heads: {heads}) — "
+            "run `alembic upgrade head`"
+        )
 
 
 async def readiness_loop(app: FastAPI) -> None:
@@ -78,10 +81,9 @@ async def readiness_loop(app: FastAPI) -> None:
                 ready = False
                 reason = f"schema check failed: {exc}"
         # (c) gRPC ready
-        if ready:
-            if not getattr(app.state, "grpc_ready", False):
-                ready = False
-                reason = "gRPC not ready"
+        if ready and not getattr(app.state, "grpc_ready", False):
+            ready = False
+            reason = "gRPC not ready"
         app.state.ready = (ready, reason)
         try:
             await asyncio.sleep(30)

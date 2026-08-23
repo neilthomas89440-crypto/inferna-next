@@ -88,8 +88,10 @@ async def run_loop(settings, manager: InstanceManager) -> None:
                 logger.info("registered with server", worker_id=worker_id, interval=sync_interval)
             except grpc.RpcError as exc:
                 if exc.code() == grpc.StatusCode.FAILED_PRECONDITION:
-                    logger.error("server rejected worker", code=exc.code().name, detail=exc.details())
-                    raise SystemExit(1)
+                    logger.error(
+                        "server rejected worker", code=exc.code().name, detail=exc.details()
+                    )
+                    raise SystemExit(1) from exc
                 logger.warning("register failed, retrying", code=exc.code().name, backoff=backoff)
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, MAX_BACKOFF_SECONDS)
