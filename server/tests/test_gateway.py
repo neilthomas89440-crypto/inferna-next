@@ -815,6 +815,34 @@ async def test_last_used_stamp_flushed_lazily(client, gateway, db, db_factory) -
     _last_used_dirty.clear()
 
 
+class _BrokenFlushSession:
+    """Stub session: execute fails, commit must never be reached."""
+
+    async def execute(self, *args, **kwargs):
+        raise RuntimeError("db down")
+
+    async def commit(self) -> None:
+        raise AssertionError("commit must not run after execute failure")
+
+
+async def test_flush_requeues_stamps_on_failure(client, gateway, db) -> None:
+    from inferna_server.api.gateway import _last_used_dirty, flush_last_used_stamps
+
+    _, key = await _admin_and_key(client)
+    resp = await client.post(
+        "/v1/chat/completions",
+        headers=auth_headers(key),
+        json={"model": "no-such-model-requeue"},
+    )
+    assert resp.status_code == 404  # stamps the key before model resolution
+    assert _last_used_dirty
+    with pytest.raises(RuntimeError, match="db down"):
+        await flush_last_used_stamps(_BrokenFlushSession())  # type: ignore[arg-type]
+    # Snapshot must be re-queued for the next cycle, not lost.
+    assert _last_used_dirty
+    _last_used_dirty.clear()
+
+
 async def test_auth_failure_counts_metrics(client, gateway) -> None:
     before = REGISTRY.get_sample_value(
         "inferna_requests_total", {"model": "unknown", "status": "401"}

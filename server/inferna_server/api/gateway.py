@@ -145,19 +145,29 @@ async def get_api_key(
 
 
 async def flush_last_used_stamps(db: AsyncSession) -> int:
-    """Persist pending last_used_at stamps with a single commit; returns count."""
+    """Persist pending last_used_at stamps with a single commit; returns count.
+
+    The dirty dict is snapshotted under the lock so the DB round-trip never
+    blocks get_api_key stamp writes; on failure the snapshot is re-queued
+    (newer stamps win via setdefault) for the next cycle.
+    """
     async with _last_used_lock:
         if not _last_used_dirty:
             return 0
         pending = dict(_last_used_dirty)
+        _last_used_dirty.clear()
+    try:
         for key_id, stamp in pending.items():
             await db.execute(
                 update(ApiKey).where(ApiKey.id == key_id).values(last_used_at=stamp)
             )
         await db.commit()
-        for key_id in pending:
-            _last_used_dirty.pop(key_id, None)
-        return len(pending)
+    except Exception:
+        async with _last_used_lock:
+            for key_id, stamp in pending.items():
+                _last_used_dirty.setdefault(key_id, stamp)
+        raise
+    return len(pending)
 
 
 def _extract_multipart_model(content_type: str, raw_body: bytes) -> str | None:
