@@ -350,7 +350,9 @@ async def _resolve_target(
             "invalid_request_error",
             "model_not_found",
         )
-    raw_host = instance.worker.address or instance.worker.hostname
+    worker = instance.worker
+    assert worker is not None  # guaranteed by the guard above
+    raw_host = worker.address or worker.hostname
     try:
         # Pin the validated IP (or original hostname) so the upstream connection
         # cannot re-resolve DNS at connect time — the SSRF hole where a host
@@ -439,7 +441,9 @@ async def _proxy(
     target, instance, model = await _resolve_target(db, model_name, request)
     # Preserve the original hostname in the Host header for virtual hosting, even
     # though the connection target is now a pinned IP (prevents vhost mismatch).
-    raw_host = instance.worker.address or instance.worker.hostname
+    worker = instance.worker
+    assert worker is not None  # guaranteed by _resolve_target
+    raw_host = worker.address or worker.hostname
     host_header = _extract_host(raw_host)
     if ":" in host_header and not host_header.startswith("["):
         host_header = f"[{host_header}]"  # bracket IPv6 literals for Host
@@ -475,15 +479,20 @@ async def _proxy(
         status_code=resp.status_code,
         media_type=resp.headers.get("content-type") or "application/json",
     )
-
-
 _CHAT_RESPONSES = {
     200: {"description": "Success (SSE stream when stream=true)"},
     400: {"description": "Bad request — missing or invalid model"},
     401: {"description": "Missing/invalid/revoked/inactive API key"},
     403: {"description": "API key lacks inference scope"},
     404: {"description": "Model unknown or no running instance"},
-    422: {"description": "Validation error"},
+    422: {
+        "description": "Validation error",
+        "content": {
+            "application/json": {
+                "schema": {"$ref": "#/components/schemas/HTTPValidationError"}
+            }
+        },
+    },
     502: {"description": "Upstream unreachable or target not allowed"},
 }
 
@@ -493,7 +502,14 @@ _EMBEDDING_RESPONSES = {
     401: {"description": "Missing/invalid/revoked/inactive API key"},
     403: {"description": "API key lacks inference scope"},
     404: {"description": "Model unknown or no running instance"},
-    422: {"description": "Validation error"},
+    422: {
+        "description": "Validation error",
+        "content": {
+            "application/json": {
+                "schema": {"$ref": "#/components/schemas/HTTPValidationError"}
+            }
+        },
+    },
     502: {"description": "Upstream unreachable or target not allowed"},
 }
 
@@ -503,7 +519,14 @@ _TRANSCRIPTION_RESPONSES = {
     401: {"description": "Missing/invalid/revoked/inactive API key"},
     403: {"description": "API key lacks inference scope"},
     404: {"description": "Model unknown or no running instance"},
-    422: {"description": "Validation error"},
+    422: {
+        "description": "Validation error",
+        "content": {
+            "application/json": {
+                "schema": {"$ref": "#/components/schemas/HTTPValidationError"}
+            }
+        },
+    },
     502: {"description": "Upstream unreachable or target not allowed"},
 }
 
