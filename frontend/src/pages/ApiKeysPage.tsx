@@ -1,11 +1,8 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { useApiKeys, useCreateApiKey, useRevokeApiKey } from "../api/hooks";
 import type { ApiKeyWithSecret } from "../api/types";
 import ConfirmDialog from "../components/ConfirmDialog";
-
-function copyText(text: string) {
-  void navigator.clipboard.writeText(text);
-}
+import { copyText } from "../lib/clipboard";
 
 export default function ApiKeysPage() {
   const keys = useApiKeys();
@@ -17,6 +14,10 @@ export default function ApiKeysPage() {
   const [error, setError] = useState<string | null>(null);
   const [created, setCreated] = useState<ApiKeyWithSecret | null>(null);
   const [revoking, setRevoking] = useState<string | null>(null);
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
+
+  useEffect(() => () => setCreated(null), []);
+
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -26,6 +27,7 @@ export default function ApiKeysPage() {
       setName("");
       setCreating(false);
       setCreated(result);
+      setCopyState("idle");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Create failed");
     }
@@ -137,7 +139,6 @@ export default function ApiKeysPage() {
           </div>
         </div>
       )}
-
       {created && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
           <div className="w-full max-w-md rounded-lg bg-white p-6 shadow-xl">
@@ -151,16 +152,27 @@ export default function ApiKeysPage() {
               </code>
               <button
                 type="button"
-                onClick={() => copyText(created.key)}
+                onClick={async () => {
+                  const result = await copyText(created.key);
+                  setCopyState(result);
+                }}
                 className="rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-600 hover:bg-slate-100"
               >
-                Copy
+                {copyState === "copied" ? "Copied" : copyState === "failed" ? "Copy failed" : "Copy"}
               </button>
             </div>
+            {copyState === "failed" && (
+              <p className="mt-2 text-sm text-red-600">
+                Copy failed — select and copy the key manually.
+              </p>
+            )}
             <div className="mt-4 flex justify-end">
               <button
                 type="button"
-                onClick={() => setCreated(null)}
+                onClick={() => {
+                  setCreated(null);
+                  setCopyState("idle");
+                }}
                 className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700"
               >
                 Done

@@ -129,7 +129,7 @@ async def test_register_persists_address(db) -> None:
     worker = (
         await db.execute(select(Worker).where(Worker.id == uuid.UUID(resp.worker_id)))
     ).scalar_one()
-    assert worker.address == "10.0.0.5"
+    assert worker.address == "http://10.0.0.5"
 
     resp2 = await register_worker(db, make_register(hostname="h2", address="   "))
     worker2 = (
@@ -145,8 +145,7 @@ async def test_register_updates_address_on_reuse(db) -> None:
     worker = (
         await db.execute(select(Worker).where(Worker.id == uuid.UUID(second.worker_id)))
     ).scalar_one()
-    assert worker.address == "10.0.0.9"
-
+    assert worker.address == "http://10.0.0.9"
 
 async def test_sync_wrong_token_rejected(db) -> None:
     worker_id, _ = await _register(db)

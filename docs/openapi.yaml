@@ -562,10 +562,22 @@ paths:
       operationId: chat_completions_v1_chat_completions_post
       responses:
         '200':
-          description: Successful Response
+          description: Success (SSE stream when stream=true)
           content:
             application/json:
               schema: {}
+        '400':
+          description: "Bad request \u2014 missing or invalid model"
+        '401':
+          description: Missing/invalid/revoked/inactive API key
+        '403':
+          description: API key lacks inference scope
+        '404':
+          description: Model unknown or no running instance
+        '422':
+          description: Validation error
+        '502':
+          description: Upstream unreachable or target not allowed
       security:
       - HTTPBearer: []
   /v1/embeddings:
@@ -576,10 +588,22 @@ paths:
       operationId: embeddings_v1_embeddings_post
       responses:
         '200':
-          description: Successful Response
+          description: Success
           content:
             application/json:
               schema: {}
+        '400':
+          description: "Bad request \u2014 missing or invalid model"
+        '401':
+          description: Missing/invalid/revoked/inactive API key
+        '403':
+          description: API key lacks inference scope
+        '404':
+          description: Model unknown or no running instance
+        '422':
+          description: Validation error
+        '502':
+          description: Upstream unreachable or target not allowed
       security:
       - HTTPBearer: []
   /v1/audio/transcriptions:
@@ -590,10 +614,22 @@ paths:
       operationId: audio_transcriptions_v1_audio_transcriptions_post
       responses:
         '200':
-          description: Successful Response
+          description: Success
           content:
             application/json:
               schema: {}
+        '400':
+          description: "Bad request \u2014 missing or invalid model"
+        '401':
+          description: Missing/invalid/revoked/inactive API key
+        '403':
+          description: API key lacks inference scope
+        '404':
+          description: Model unknown or no running instance
+        '422':
+          description: Validation error
+        '502':
+          description: Upstream unreachable or target not allowed
       security:
       - HTTPBearer: []
   /v1/models:
@@ -604,10 +640,14 @@ paths:
       operationId: list_models_v1_models_get
       responses:
         '200':
-          description: Successful Response
+          description: Success
           content:
             application/json:
               schema: {}
+        '401':
+          description: Missing/invalid/revoked/inactive API key
+        '403':
+          description: API key lacks inference scope
       security:
       - HTTPBearer: []
   /healthz:
@@ -693,8 +733,6 @@ components:
       - name
       - created_at
       - updated_at
-      - last_used_at
-      - revoked_at
       title: ApiKeyOut
     ApiKeySecretOut:
       properties:
@@ -745,8 +783,6 @@ components:
       - name
       - created_at
       - updated_at
-      - last_used_at
-      - revoked_at
       - key
       title: ApiKeySecretOut
     ClusterCreate:
@@ -1265,4 +1301,7 @@ components:
           tokenUrl: /api/v1/auth/login
     HTTPBearer:
       type: http
+      description: "Inferna API key \u2014 'inf-' followed by 32 hex characters, created\
+        \ in the web UI."
       scheme: bearer
+      bearerFormat: inf-<32 hex>

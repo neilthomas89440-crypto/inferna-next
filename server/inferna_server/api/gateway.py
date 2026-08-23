@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 import re
 import time
+import uuid
 from collections.abc import AsyncIterator
+from datetime import datetime
 
 import httpx
 import structlog
@@ -13,7 +15,7 @@ from fastapi import APIRouter, Depends, FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from python_multipart.multipart import MultipartParser, parse_options_header
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -31,6 +33,7 @@ from inferna_server.services.metrics import (
     inferna_time_to_first_byte_seconds,
     inferna_tokens,
 )
+from inferna_server.services.upstream_guard import assert_upstream_allowed
 from inferna_server.services.workers_svc import sha256_hex
 
 logger = structlog.get_logger(__name__)
@@ -43,7 +46,16 @@ _COMPLETION_TOKENS_RE = re.compile(r'"completion_tokens"\s*:\s*(\d+)')
 # How often a key's last_used_at is stamped; avoids a DB write on every request.
 LAST_USED_UPDATE_SECONDS = 60
 
-_DEFAULT_CLIENT: httpx.AsyncClient | None = None
+# Inferna API key format: inf- + 32 hex chars
+_gateway_bearer = HTTPBearer(
+    auto_error=False,
+    bearerFormat="inf-<32 hex>",
+    description="Inferna API key — 'inf-' followed by 32 hex characters, created in the web UI.",
+)
+
+# last_used_at stamps are collected in memory and persisted by a background
+# task in main.py, so the request-scoped session never COMMITs on the hot path.
+_last_used_dirty: dict[uuid.UUID, datetime] = {}
 
 
 class OpenAIError(Exception):
@@ -86,7 +98,7 @@ async def openai_error_handler(request: Request, exc: Exception) -> JSONResponse
 
 
 async def get_api_key(
-    credentials: HTTPAuthorizationCredentials | None = Depends(HTTPBearer(auto_error=False)),
+    credentials: HTTPAuthorizationCredentials | None = Depends(_gateway_bearer),
     db: AsyncSession = Depends(get_db),
 ) -> ApiKey:
     """Gateway auth: `Authorization: Bearer inf-<key>`; rejects missing/unknown/revoked/inactive."""
@@ -119,10 +131,25 @@ async def get_api_key(
     if key.last_used_at is None or (
         utcnow() - key.last_used_at
     ).total_seconds() >= LAST_USED_UPDATE_SECONDS:
-        key.last_used_at = utcnow()
-        # Commit before any streaming so this write is never blocked behind a long-lived stream.
-        await db.commit()
+        now = utcnow()
+        key.last_used_at = now
+        _last_used_dirty[key.id] = now
     return key
+
+
+async def flush_last_used_stamps(db: AsyncSession) -> int:
+    """Persist pending last_used_at stamps with a single commit; returns count."""
+    if not _last_used_dirty:
+        return 0
+    pending = dict(_last_used_dirty)
+    for key_id, stamp in pending.items():
+        await db.execute(
+            update(ApiKey).where(ApiKey.id == key_id).values(last_used_at=stamp)
+        )
+    await db.commit()
+    for key_id in pending:
+        _last_used_dirty.pop(key_id, None)
+    return len(pending)
 
 
 def _extract_multipart_model(content_type: str, raw_body: bytes) -> str | None:
@@ -266,34 +293,33 @@ async def _resolve_target(
             "invalid_request_error",
             "model_not_found",
         )
-    # Worker engines expose the OpenAI-compatible surface under /v1 (vLLM/SGLang),
-    # so the gateway forwards the client path including its /v1 prefix unchanged.
-    target = (
-        f"http://{instance.worker.address or instance.worker.hostname}:"
-        f"{instance.port}{request.url.path}"
-    )
+    raw_host = instance.worker.address or instance.worker.hostname
+    try:
+        await assert_upstream_allowed(raw_host, get_settings())
+    except ValueError as exc:
+        logger.warning(
+            "gateway upstream target blocked",
+            worker=instance.worker.name,
+            host=raw_host,
+            reason=str(exc),
+        )
+        raise OpenAIError(
+            502, "upstream target not allowed", "api_error", "upstream_not_allowed"
+        ) from exc
+    # Build target with scheme support
+    scheme_host = raw_host if "://" in raw_host else f"http://{raw_host}"
+    target = f"{scheme_host}:{instance.port}{request.url.path}"
     if request.url.query:
         target += f"?{request.url.query}"
     return target, instance, model
 
 
 def get_gateway_client(app: FastAPI) -> httpx.AsyncClient:
-    """Lifespan client when present; else a lazy module-level default.
-
-    Tests override it explicitly via `app.state.gateway_client`.
-    """
+    """Lifespan-injected client; tests override it via app.state.gateway_client."""
     client = getattr(app.state, "gateway_client", None)
-    if client is not None:
-        return client
-    global _DEFAULT_CLIENT
-    if _DEFAULT_CLIENT is None:
-        settings = get_settings()
-        _DEFAULT_CLIENT = httpx.AsyncClient(
-            timeout=httpx.Timeout(
-                connect=settings.gateway_connect_timeout, read=settings.gateway_read_timeout
-            )
-        )
-    return _DEFAULT_CLIENT
+    if client is None:
+        raise RuntimeError("gateway client not configured (app.state.gateway_client)")
+    return client
 
 
 def _record_usage(model_name: str, tail: list[str]) -> None:
@@ -311,14 +337,15 @@ def _record_usage(model_name: str, tail: list[str]) -> None:
 
 
 async def _relay(resp: httpx.Response, model_name: str, path: str) -> AsyncIterator[bytes]:
-    # Small tail buffer for usage extraction on chat completions; bytes are always yielded first.
+    # Tail buffer for usage extraction (chat + embeddings); bytes always yielded first.
+    # Audio transcription responses carry no usage from OpenAI upstreams.
     tail: list[str] = []
     try:
         async for chunk in resp.aiter_bytes():
-            if path == "/v1/chat/completions":
+            if path in ("/v1/chat/completions", "/v1/embeddings"):
                 tail.append(chunk.decode("utf-8", "replace"))
-                if len(tail) > 2:
-                    tail = tail[-2:]
+                while len(tail) > 8 or sum(len(c) for c in tail) > 16384:
+                    tail.pop(0)
             yield chunk
         _record_usage(model_name, tail)
     except httpx.TransportError as exc:
@@ -347,7 +374,7 @@ async def _proxy(
     client = get_gateway_client(request.app)
     settings = get_settings()
     target, instance, model = await _resolve_target(db, model_name, request)
-    started = time.monotonic()
+    started: float | None = None
     try:
         req = client.build_request(
             request.method,
@@ -360,16 +387,19 @@ async def _proxy(
                 connect=settings.gateway_connect_timeout,
             ),
         )
+        started = time.monotonic()
         resp = await client.send(req, stream=True)
     except (httpx.TransportError, httpx.InvalidURL) as exc:
+        elapsed = time.monotonic() - started if started is not None else 0
+        inferna_time_to_first_byte_seconds.labels(model_name).observe(elapsed)
+        inferna_requests.labels(model=model_name, status="502").inc()
         logger.warning(
             "gateway upstream unreachable", model=model_name, target=target, error=str(exc)
         )
         raise OpenAIError(502, "upstream unreachable", "api_error", "upstream_error") from exc
 
-    inferna_time_to_first_byte_seconds.labels(model_name).observe(time.monotonic() - started)
+    inferna_time_to_first_byte_seconds.labels(model_name).observe(time.monotonic() - started)  # type: ignore[arg-type]
     inferna_requests.labels(model=model_name, status=str(resp.status_code)).inc()
-
     return StreamingResponse(
         _relay(resp, model_name, request.url.path),
         status_code=resp.status_code,
@@ -377,7 +407,44 @@ async def _proxy(
     )
 
 
-@router.post("/chat/completions")
+_CHAT_RESPONSES = {
+    200: {"description": "Success (SSE stream when stream=true)"},
+    400: {"description": "Bad request — missing or invalid model"},
+    401: {"description": "Missing/invalid/revoked/inactive API key"},
+    403: {"description": "API key lacks inference scope"},
+    404: {"description": "Model unknown or no running instance"},
+    422: {"description": "Validation error"},
+    502: {"description": "Upstream unreachable or target not allowed"},
+}
+
+_EMBEDDING_RESPONSES = {
+    200: {"description": "Success"},
+    400: {"description": "Bad request — missing or invalid model"},
+    401: {"description": "Missing/invalid/revoked/inactive API key"},
+    403: {"description": "API key lacks inference scope"},
+    404: {"description": "Model unknown or no running instance"},
+    422: {"description": "Validation error"},
+    502: {"description": "Upstream unreachable or target not allowed"},
+}
+
+_TRANSCRIPTION_RESPONSES = {
+    200: {"description": "Success"},
+    400: {"description": "Bad request — missing or invalid model"},
+    401: {"description": "Missing/invalid/revoked/inactive API key"},
+    403: {"description": "API key lacks inference scope"},
+    404: {"description": "Model unknown or no running instance"},
+    422: {"description": "Validation error"},
+    502: {"description": "Upstream unreachable or target not allowed"},
+}
+
+_LIST_MODELS_RESPONSES = {
+    200: {"description": "Success"},
+    401: {"description": "Missing/invalid/revoked/inactive API key"},
+    403: {"description": "API key lacks inference scope"},
+}
+
+
+@router.post("/chat/completions", responses=_CHAT_RESPONSES)  # type: ignore[arg-type]
 async def chat_completions(
     request: Request,
     key: ApiKey = Depends(get_api_key),
@@ -388,7 +455,7 @@ async def chat_completions(
     return await _proxy(request, raw_body, model_name, db)
 
 
-@router.post("/embeddings")
+@router.post("/embeddings", responses=_EMBEDDING_RESPONSES)  # type: ignore[arg-type]
 async def embeddings(
     request: Request,
     key: ApiKey = Depends(get_api_key),
@@ -399,7 +466,7 @@ async def embeddings(
     return await _proxy(request, raw_body, model_name, db)
 
 
-@router.post("/audio/transcriptions")
+@router.post("/audio/transcriptions", responses=_TRANSCRIPTION_RESPONSES)  # type: ignore[arg-type]
 async def audio_transcriptions(
     request: Request,
     key: ApiKey = Depends(get_api_key),
@@ -410,7 +477,7 @@ async def audio_transcriptions(
     return await _proxy(request, raw_body, model_name, db)
 
 
-@router.get("/models")
+@router.get("/models", responses=_LIST_MODELS_RESPONSES)  # type: ignore[arg-type]
 async def list_models(
     request: Request,
     key: ApiKey = Depends(get_api_key),

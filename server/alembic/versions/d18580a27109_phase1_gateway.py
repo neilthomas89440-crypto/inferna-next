@@ -59,13 +59,10 @@ def upgrade() -> None:
     sa.UniqueConstraint('key_hash')
     )
     op.create_index(op.f('ix_api_keys_user_id'), 'api_keys', ['user_id'], unique=False)
-    op.create_index(op.f('ix_api_keys_key_hash'), 'api_keys', ['key_hash'], unique=True)
     _add_address_column()
-
 
 def downgrade() -> None:
     """Downgrade schema."""
     _drop_address_column()
-    op.drop_index(op.f('ix_api_keys_key_hash'), table_name='api_keys')
     op.drop_index(op.f('ix_api_keys_user_id'), table_name='api_keys')
     op.drop_table('api_keys')

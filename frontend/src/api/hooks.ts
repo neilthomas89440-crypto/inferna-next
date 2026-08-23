@@ -166,7 +166,7 @@ export function useDashboard() {
 }
 
 export function useApiKeys() {
-  return useQuery({ queryKey: ["keys"], queryFn: () => api<ApiKey[]>("/keys") });
+  return useQuery({ queryKey: ["keys"], queryFn: () => api<ApiKey[]>("/keys"), refetchInterval: LIVE_INTERVAL });
 }
 
 export function useCreateApiKey() {

@@ -25,6 +25,7 @@ from inferna_server.models import (
     WorkerGPU,
 )
 from inferna_server.proto import cluster_pb2
+from inferna_server.services.upstream_guard import validate_worker_address
 
 logger = structlog.get_logger(__name__)
 
@@ -87,6 +88,16 @@ async def register_worker(
     if cluster is None:
         raise grpc_error(grpc.StatusCode.NOT_FOUND, f"cluster '{cluster_name}' not found")
 
+    raw_address = request.address.strip()
+    address: str | None = None
+    if raw_address:
+        try:
+            address = await validate_worker_address(raw_address, settings)
+        except ValueError as exc:
+            raise grpc_error(
+                grpc.StatusCode.INVALID_ARGUMENT, f"invalid worker address: {exc}"
+            ) from None
+
     token = generate_worker_token()
     worker = (
         await db.execute(
@@ -103,7 +114,7 @@ async def register_worker(
             state="connected",
             token_hash=sha256_hex(token),
             version=request.version or None,
-            address=request.address.strip() or None,
+            address=address,
             last_seen_at=utcnow(),
         )
         db.add(worker)
@@ -112,7 +123,7 @@ async def register_worker(
         worker.token_hash = sha256_hex(token)
         worker.state = "connected"
         worker.last_seen_at = utcnow()
-        worker.address = request.address.strip() or None
+        worker.address = address
         if request.worker_name:
             worker.name = request.worker_name
         if request.version:
