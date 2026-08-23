@@ -813,3 +813,15 @@ async def test_last_used_stamp_flushed_lazily(client, gateway, db, db_factory) -
             # If it was already flushed (rare), just ensure after flush it's still not None
             assert krow.last_used_at is not None
     _last_used_dirty.clear()
+
+
+async def test_auth_failure_counts_metrics(client, gateway) -> None:
+    before = REGISTRY.get_sample_value(
+        "inferna_requests_total", {"model": "unknown", "status": "401"}
+    ) or 0
+    resp = await client.post("/v1/chat/completions", json={"model": "x"})
+    assert resp.status_code == 401
+    after = REGISTRY.get_sample_value(
+        "inferna_requests_total", {"model": "unknown", "status": "401"}
+    ) or 0
+    assert after == before + 1

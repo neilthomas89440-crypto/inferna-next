@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import time
@@ -56,6 +57,7 @@ _gateway_bearer = HTTPBearer(
 # last_used_at stamps are collected in memory and persisted by a background
 # task in main.py, so the request-scoped session never COMMITs on the hot path.
 _last_used_dirty: dict[uuid.UUID, datetime] = {}
+_last_used_lock = asyncio.Lock()
 
 
 class OpenAIError(Exception):
@@ -94,6 +96,10 @@ def openai_error(
 async def openai_error_handler(request: Request, exc: Exception) -> JSONResponse:
     if not isinstance(exc, OpenAIError):
         raise exc
+    # 502s are counted in _proxy with the real model label; count the rest here
+    # (model is not reliably parseable for auth/model-resolution failures).
+    if exc.status_code != 502 and request.url.path.startswith("/v1"):
+        inferna_requests.labels(model="unknown", status=str(exc.status_code)).inc()
     return openai_error(exc.status_code, exc.message, exc.type_, exc.code, headers=exc.headers)
 
 
@@ -133,23 +139,25 @@ async def get_api_key(
     ).total_seconds() >= LAST_USED_UPDATE_SECONDS:
         now = utcnow()
         key.last_used_at = now
-        _last_used_dirty[key.id] = now
+        async with _last_used_lock:
+            _last_used_dirty[key.id] = now
     return key
 
 
 async def flush_last_used_stamps(db: AsyncSession) -> int:
     """Persist pending last_used_at stamps with a single commit; returns count."""
-    if not _last_used_dirty:
-        return 0
-    pending = dict(_last_used_dirty)
-    for key_id, stamp in pending.items():
-        await db.execute(
-            update(ApiKey).where(ApiKey.id == key_id).values(last_used_at=stamp)
-        )
-    await db.commit()
-    for key_id in pending:
-        _last_used_dirty.pop(key_id, None)
-    return len(pending)
+    async with _last_used_lock:
+        if not _last_used_dirty:
+            return 0
+        pending = dict(_last_used_dirty)
+        for key_id, stamp in pending.items():
+            await db.execute(
+                update(ApiKey).where(ApiKey.id == key_id).values(last_used_at=stamp)
+            )
+        await db.commit()
+        for key_id in pending:
+            _last_used_dirty.pop(key_id, None)
+        return len(pending)
 
 
 def _extract_multipart_model(content_type: str, raw_body: bytes) -> str | None:
