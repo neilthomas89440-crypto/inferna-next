@@ -313,6 +313,9 @@ async def _relay(resp: httpx.Response, model_name: str, path: str) -> AsyncItera
                     tail = tail[-2:]
             yield chunk
         _record_usage(model_name, tail)
+    except httpx.TransportError as exc:
+        # Headers are already sent; the only option is logging and ending the stream.
+        logger.warning("gateway upstream stream failed", model=model_name, error=str(exc))
     finally:
         await resp.aclose()
 
@@ -350,12 +353,7 @@ async def _proxy(
             ),
         )
         resp = await client.send(req, stream=True)
-    except (
-        httpx.ConnectError,
-        httpx.ConnectTimeout,
-        httpx.TimeoutException,
-        httpx.InvalidURL,
-    ) as exc:
+    except (httpx.TransportError, httpx.InvalidURL) as exc:
         logger.warning(
             "gateway upstream unreachable", model=model_name, target=target, error=str(exc)
         )

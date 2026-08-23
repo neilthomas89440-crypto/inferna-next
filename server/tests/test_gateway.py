@@ -243,17 +243,61 @@ async def test_non_object_json_body_with_query_model_proxied(client, gateway, db
     assert gateway["url"] == "http://127.0.0.1:8010/v1/chat/completions?model=json-arr-model"
 
 
-async def test_malformed_worker_address_502(client, gateway, db) -> None:
-    """A worker with an unparsable registered address yields upstream_error, not a 500."""
+class _BrokenStream(httpx.AsyncByteStream):
+    async def __aiter__(self):
+        yield b'data: {"id":"chatcmpl-1"}\n\n'
+        raise httpx.RemoteProtocolError("connection lost mid-stream")
+
+
+class _BrokenStreamTransport(httpx.AsyncBaseTransport):
+    """Returns headers plus one chunk, then fails mid-stream (greptile P1)."""
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, stream=_BrokenStream()
+        )
+
+
+async def test_upstream_protocol_error_at_send_502(client, gateway, db) -> None:
+    """Invalid HTTP from the upstream during send yields upstream_error, not a 500."""
     _, key = await _admin_and_key(client)
-    await _seed_instance(db, "bad-addr-model", "Bad Addr Model", address="127.0.0.1:notaport")
-    resp = await client.post(
-        "/v1/chat/completions",
-        headers=auth_headers(key),
-        json={"model": "bad-addr-model", "stream": True},
-    )
-    assert resp.status_code == 502
-    assert resp.json()["error"]["code"] == "upstream_error"
+    await _seed_instance(db, "proto-model", "Proto Model")
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.RemoteProtocolError("invalid HTTP from upstream")
+
+    mock = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    app.state.gateway_client = mock
+    try:
+        resp = await client.post(
+            "/v1/chat/completions",
+            headers=auth_headers(key),
+            json={"model": "proto-model", "stream": True},
+        )
+        assert resp.status_code == 502
+        assert resp.json()["error"]["code"] == "upstream_error"
+    finally:
+        app.state.gateway_client = None
+        await mock.aclose()
+
+
+async def test_upstream_stream_failure_truncates_without_crash(client, gateway, db) -> None:
+    """A mid-stream transport failure ends the stream cleanly (headers already sent)."""
+    _, key = await _admin_and_key(client)
+    await _seed_instance(db, "stream-model", "Stream Model")
+    mock = httpx.AsyncClient(transport=_BrokenStreamTransport())
+    app.state.gateway_client = mock
+    try:
+        resp = await client.post(
+            "/v1/chat/completions",
+            headers=auth_headers(key),
+            json={"model": "stream-model", "stream": True},
+        )
+        assert resp.status_code == 200
+        assert resp.content == b'data: {"id":"chatcmpl-1"}\n\n'
+    finally:
+        app.state.gateway_client = None
+        await mock.aclose()
 
 
 async def test_multipart_model_extraction(client, gateway, db) -> None:
