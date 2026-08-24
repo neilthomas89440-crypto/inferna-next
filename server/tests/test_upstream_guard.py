@@ -36,6 +36,7 @@ def _dev_settings(**overrides) -> Settings:
     base.update(overrides)  # type: ignore[arg-type]
     return Settings(**base)  # type: ignore[arg-type]
 
+
 # --- normalize ---
 
 
@@ -96,7 +97,14 @@ def test_normalize_trailing_slash_allowed() -> None:
 
 # --- assert_upstream_allowed / validate_worker_address policy ---
 
-_PROD_BLOCKED = ["127.0.0.1", "169.254.169.254", "10.1.2.3", "192.168.1.1", "::1", "::ffff:127.0.0.1"]
+_PROD_BLOCKED = [
+    "127.0.0.1",
+    "169.254.169.254",
+    "10.1.2.3",
+    "192.168.1.1",
+    "::1",
+    "::ffff:127.0.0.1",
+]
 _PROD_ALLOWED = ["8.8.8.8", "1.1.1.1"]
 
 
@@ -235,3 +243,42 @@ async def test_allowlisted_hostname_unresolvable_rejected_in_production(
     # Exact allowlist hostname match with DNS failure: no IP to pin → reject.
     with pytest.raises(ValueError, match="unresolvable"):
         await assert_upstream_allowed("trusted.local", settings)
+
+
+# --- multi-IP resolution semantics (security review T2) ---
+
+
+def _patched_resolver(monkeypatch, ips: list[str]) -> None:
+    async def fake_resolve(host: str):
+        return [ipaddress.ip_address(ip) for ip in ips]
+
+    monkeypatch.setattr(upstream_guard, "resolve_host_ips", fake_resolve)
+
+
+async def test_allowlist_multi_ip_all_match_required(monkeypatch) -> None:
+    # Allowlist policy uses ALL-match semantics: one non-allowlisted IP rejects.
+    settings = _prod_settings(gateway_upstream_allowlist="8.8.8.8")
+    _patched_resolver(monkeypatch, ["8.8.8.8", "1.1.1.1"])
+    with pytest.raises(ValueError, match="non-allowlisted"):
+        await assert_upstream_allowed("multi.example", settings)
+
+
+async def test_allowlist_blocked_ip_alone_rejected(monkeypatch) -> None:
+    settings = _prod_settings(gateway_upstream_allowlist="8.8.8.8")
+    _patched_resolver(monkeypatch, ["169.254.169.254"])
+    with pytest.raises(ValueError, match="non-allowlisted"):
+        await assert_upstream_allowed("evil.example", settings)
+
+
+async def test_allowlist_allowed_ip_alone_accepted(monkeypatch) -> None:
+    settings = _prod_settings(gateway_upstream_allowlist="8.8.8.8")
+    _patched_resolver(monkeypatch, ["8.8.8.8"])
+    assert await upstream_guard.resolve_and_validate("ok.example", settings) == "8.8.8.8"
+
+
+async def test_prod_empty_allowlist_any_blocked_rejected(monkeypatch) -> None:
+    # Production, empty allowlist: ANY blocked IP among the resolved set rejects.
+    settings = _prod_settings()
+    _patched_resolver(monkeypatch, ["8.8.8.8", "169.254.169.254"])
+    with pytest.raises(ValueError, match="blocked"):
+        await assert_upstream_allowed("mixed.example", settings)

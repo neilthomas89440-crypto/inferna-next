@@ -214,6 +214,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ApiKeyOut'
+        '404':
+          description: Key not found
         '422':
           description: Validation Error
           content:
@@ -589,22 +591,40 @@ paths:
                 description: SSE stream of JSON chunks
         '400':
           description: "Bad request \u2014 missing or invalid model"
-        '401':
-          description: Missing/invalid/revoked/inactive API key
-        '403':
-          description: API key lacks inference scope
-        '404':
-          description: Model unknown or no running instance
-        '422':
-          description: Validation error
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HTTPValidationError'
+                $ref: '#/components/schemas/GatewayError'
+        '401':
+          description: Missing/invalid/revoked/inactive API key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GatewayError'
+        '403':
+          description: API key lacks inference scope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GatewayError'
+        '404':
+          description: Model unknown or no running instance
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GatewayError'
         '413':
           description: Request body exceeds size limit
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GatewayError'
         '502':
           description: Upstream unreachable or target not allowed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GatewayError'
       security:
       - HTTPBearer: []
   /v1/embeddings:
@@ -637,22 +657,40 @@ paths:
               schema: {}
         '400':
           description: "Bad request \u2014 missing or invalid model"
-        '401':
-          description: Missing/invalid/revoked/inactive API key
-        '403':
-          description: API key lacks inference scope
-        '404':
-          description: Model unknown or no running instance
-        '422':
-          description: Validation error
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HTTPValidationError'
+                $ref: '#/components/schemas/GatewayError'
+        '401':
+          description: Missing/invalid/revoked/inactive API key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GatewayError'
+        '403':
+          description: API key lacks inference scope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GatewayError'
+        '404':
+          description: Model unknown or no running instance
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GatewayError'
         '413':
           description: Request body exceeds size limit
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GatewayError'
         '502':
           description: Upstream unreachable or target not allowed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GatewayError'
       security:
       - HTTPBearer: []
   /v1/audio/transcriptions:
@@ -688,24 +726,49 @@ paths:
               schema: {}
         '400':
           description: "Bad request \u2014 missing or invalid model"
-        '401':
-          description: Missing/invalid/revoked/inactive API key
-        '403':
-          description: API key lacks inference scope
-        '404':
-          description: Model unknown or no running instance
-        '422':
-          description: Validation error
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HTTPValidationError'
+                $ref: '#/components/schemas/GatewayError'
+        '401':
+          description: Missing/invalid/revoked/inactive API key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GatewayError'
+        '403':
+          description: API key lacks inference scope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GatewayError'
+        '404':
+          description: Model unknown or no running instance
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GatewayError'
         '413':
           description: Request body exceeds size limit
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GatewayError'
         '502':
           description: Upstream unreachable or target not allowed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GatewayError'
       security:
       - HTTPBearer: []
+      parameters:
+      - name: model
+        in: query
+        required: false
+        schema:
+          type: string
+        description: Required for application/octet-stream bodies
   /v1/models:
     get:
       tags:
@@ -720,8 +783,16 @@ paths:
               schema: {}
         '401':
           description: Missing/invalid/revoked/inactive API key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GatewayError'
         '403':
           description: API key lacks inference scope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GatewayError'
       security:
       - HTTPBearer: []
   /healthz:
@@ -1366,6 +1437,26 @@ components:
       - memory_mb
       - last_seen_at
       title: WorkerOut
+    GatewayError:
+      title: GatewayError
+      type: object
+      description: OpenAI-style error envelope returned by /v1/* gateway routes.
+      required:
+      - error
+      properties:
+        error:
+          type: object
+          required:
+          - message
+          - type
+          - code
+          properties:
+            message:
+              type: string
+            type:
+              type: string
+            code:
+              type: string
   securitySchemes:
     OAuth2PasswordBearer:
       type: oauth2

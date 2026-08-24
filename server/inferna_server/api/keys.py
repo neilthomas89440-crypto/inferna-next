@@ -56,7 +56,11 @@ async def list_keys(
     return list(rows.scalars().all())
 
 
-@router.post("/{key_id}/revoke", response_model=ApiKeyOut)
+@router.post(
+    "/{key_id}/revoke",
+    response_model=ApiKeyOut,
+    responses={404: {"description": "Key not found"}},
+)
 async def revoke_key(
     key_id: uuid.UUID,
     current: User = Depends(get_current_user),

@@ -47,7 +47,7 @@ export default function ApiKeysPage() {
   if (keys.isLoading) {
     return <p className="text-slate-400">Loading API keys…</p>;
   }
-  if (keys.isError || !keys.data) {
+  if ((keys.isError || !keys.data) && !created && !creating && !revoking) {
     return (
       <p className="text-red-600">
         Failed to load API keys: {String(keys.error ?? "unknown error")}
@@ -70,6 +70,12 @@ export default function ApiKeysPage() {
           New key
         </button>
       </div>
+
+      {keys.isError && (
+        <div className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
+          Background refresh failed — showing cached data: {String(keys.error ?? "unknown error")}
+        </div>
+      )}
 
       {error && (
         <div className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>

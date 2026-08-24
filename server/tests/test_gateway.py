@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
@@ -12,8 +13,10 @@ import pytest
 from conftest import TEST_ADMIN, auth_headers, login
 from prometheus_client import REGISTRY
 from sqlalchemy import select
+from starlette.requests import Request
 
-from inferna_server.api.gateway import flush_last_used_stamps
+from inferna_server.api import gateway as gateway_api
+from inferna_server.api.gateway import OpenAIError, flush_last_used_stamps
 from inferna_server.config import get_settings
 from inferna_server.main import app
 from inferna_server.models import ApiKey, Cluster, Model, ModelInstance, User, Worker
@@ -37,9 +40,7 @@ async def gateway(client, db):
         captured["url"] = str(request.url)
         if request.url.path == "/v1/models":
             return httpx.Response(200, json={"object": "list", "data": []})
-        return httpx.Response(
-            200, headers={"content-type": "text/event-stream"}, content=SSE_BODY
-        )
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=SSE_BODY)
 
     mock = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     app.state.gateway_client = mock
@@ -52,9 +53,7 @@ async def _seed_instance(
     db, name: str, display_name: str, port: int = 8010, address: str | None = "127.0.0.1"
 ) -> Model:
     """Create a model with one connected worker + one running instance."""
-    cluster = (
-        await db.execute(select(Cluster).where(Cluster.name == "default"))
-    ).scalar_one()
+    cluster = (await db.execute(select(Cluster).where(Cluster.name == "default"))).scalar_one()
     model = Model(
         name=name,
         display_name=display_name,
@@ -92,9 +91,7 @@ async def _seed_instance(
 
 
 async def _api_key(client: httpx.AsyncClient, token: str) -> str:
-    resp = await client.post(
-        "/api/v1/keys", json={"name": "gw"}, headers=auth_headers(token)
-    )
+    resp = await client.post("/api/v1/keys", json={"name": "gw"}, headers=auth_headers(token))
     assert resp.status_code == 201, resp.text
     return resp.json()["key"]
 
@@ -130,9 +127,7 @@ async def test_revoked_key_401(client, gateway) -> None:
     key_id = next(k["id"] for k in keys if k["name"] == "gw")
     rv = await client.post(f"/api/v1/keys/{key_id}/revoke", headers=auth_headers(token))
     assert rv.status_code == 200
-    resp = await client.post(
-        "/v1/chat/completions", headers=auth_headers(key), json={"model": "x"}
-    )
+    resp = await client.post("/v1/chat/completions", headers=auth_headers(key), json={"model": "x"})
     assert resp.status_code == 401
     assert resp.json()["error"]["code"] == "invalid_api_key"
 
@@ -178,7 +173,11 @@ async def test_streaming_passthrough(client, gateway, db) -> None:
     resp = await client.post(
         "/v1/chat/completions",
         headers=auth_headers(key),
-        json={"model": "proxy-model", "messages": [{"role": "user", "content": "hi"}], "stream": True},
+        json={
+            "model": "proxy-model",
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": True,
+        },
     )
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith("text/event-stream")
@@ -192,7 +191,11 @@ async def test_non_stream_passthrough(client, gateway, db) -> None:
     resp = await client.post(
         "/v1/chat/completions",
         headers=auth_headers(key),
-        json={"model": "proxy-model-2", "messages": [{"role": "user", "content": "hi"}], "stream": False},
+        json={
+            "model": "proxy-model-2",
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": False,
+        },
     )
     assert resp.status_code == 200
     assert resp.content == SSE_BODY
@@ -399,7 +402,9 @@ async def test_registration_rejects_ssrf_address(client, db, monkeypatch) -> Non
         assert exc_info.value.code() == grpc.StatusCode.INVALID_ARGUMENT
         details = exc_info.value.details() or ""
         assert "invalid worker address" in details.lower()
-        row = (await db.execute(select(Worker).where(Worker.hostname == "evil"))).scalar_one_or_none()
+        row = (
+            await db.execute(select(Worker).where(Worker.hostname == "evil"))
+        ).scalar_one_or_none()
         assert row is None
     finally:
         get_settings.cache_clear()
@@ -425,7 +430,9 @@ async def test_registration_allows_public_address(client, db, monkeypatch) -> No
         )
         resp = await register_worker(db, req)
         assert resp.worker_id
-        worker = (await db.execute(select(Worker).where(Worker.hostname == "public-host"))).scalar_one()
+        worker = (
+            await db.execute(select(Worker).where(Worker.hostname == "public-host"))
+        ).scalar_one()
         assert worker.address == "http://8.8.8.8"
     finally:
         get_settings.cache_clear()
@@ -603,7 +610,9 @@ async def test_embeddings_proxied_and_usage_recorded(client, gateway, db) -> Non
 
     async def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/v1/embeddings":
-            return httpx.Response(200, headers={"content-type": "application/json"}, content=embed_body)
+            return httpx.Response(
+                200, headers={"content-type": "application/json"}, content=embed_body
+            )
         return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=SSE_BODY)
 
     mock = httpx.AsyncClient(transport=httpx.MockTransport(handler))
@@ -704,14 +713,16 @@ async def test_client_disconnect_closes_upstream(client, gateway, db) -> None:
             import asyncio as _asyncio
 
             await _asyncio.sleep(0.5)
-            yield b'data: [DONE]\n\n'
+            yield b"data: [DONE]\n\n"
 
         async def aclose(self) -> None:
             closed_flag["closed"] = True
 
     class TrackingTransport(httpx.AsyncBaseTransport):
         async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-            return httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=TrackingStream())
+            return httpx.Response(
+                200, headers={"content-type": "text/event-stream"}, stream=TrackingStream()
+            )
 
     mock = httpx.AsyncClient(transport=TrackingTransport())
     app.state.gateway_client = mock
@@ -721,7 +732,11 @@ async def test_client_disconnect_closes_upstream(client, gateway, db) -> None:
             "POST",
             "/v1/chat/completions",
             headers=auth_headers(key),
-            json={"model": "disconnect-model", "messages": [{"role": "user", "content": "hi"}], "stream": True},
+            json={
+                "model": "disconnect-model",
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": True,
+            },
         ) as resp:
             assert resp.status_code == 200
             # Read first chunk then disconnect early
@@ -754,7 +769,9 @@ def test_gateway_kill_switch() -> None:
         capture_output=True,
         text=True,
     )
-    assert result_false.returncode == 0, f"kill-switch false stderr: {result_false.stderr}\nstdout: {result_false.stdout}"
+    assert result_false.returncode == 0, (
+        f"kill-switch false stderr: {result_false.stderr}\nstdout: {result_false.stdout}"
+    )
 
     code_true = (
         "import os; os.environ['INFERNA_ENV']='development'; os.environ['INFERNA_GATEWAY_ENABLED']='true'; "
@@ -769,7 +786,9 @@ def test_gateway_kill_switch() -> None:
         capture_output=True,
         text=True,
     )
-    assert result_true.returncode == 0, f"kill-switch true stderr: {result_true.stderr}\nstdout: {result_true.stdout}"
+    assert result_true.returncode == 0, (
+        f"kill-switch true stderr: {result_true.stderr}\nstdout: {result_true.stdout}"
+    )
 
 
 async def test_last_used_stamp_flushed_lazily(client, gateway, db, db_factory) -> None:
@@ -844,12 +863,193 @@ async def test_flush_requeues_stamps_on_failure(client, gateway, db) -> None:
 
 
 async def test_auth_failure_counts_metrics(client, gateway) -> None:
-    before = REGISTRY.get_sample_value(
-        "inferna_requests_total", {"model": "unknown", "status": "401"}
-    ) or 0
+    before = (
+        REGISTRY.get_sample_value("inferna_requests_total", {"model": "unknown", "status": "401"})
+        or 0
+    )
     resp = await client.post("/v1/chat/completions", json={"model": "x"})
     assert resp.status_code == 401
-    after = REGISTRY.get_sample_value(
-        "inferna_requests_total", {"model": "unknown", "status": "401"}
-    ) or 0
+    after = (
+        REGISTRY.get_sample_value("inferna_requests_total", {"model": "unknown", "status": "401"})
+        or 0
+    )
     assert after == before + 1
+
+
+# --- body limits (security review T1) ---
+
+
+class _StubRequest(Request):
+    """Minimal Request stand-in for _read_body_limited unit tests."""
+
+    def __init__(self, headers: dict[str, str], chunks: list[bytes]) -> None:
+        super().__init__(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/v1/chat/completions",
+                "headers": [(k.lower().encode(), v.encode()) for k, v in headers.items()],
+                "query_string": b"",
+            }
+        )
+        self._chunks = chunks
+        self.stream_consumed = False
+
+    async def stream(self):
+        self.stream_consumed = True
+        for chunk in self._chunks:
+            yield chunk
+
+
+async def test_read_body_limited_content_length_rejects_before_reading() -> None:
+    """A Content-Length above the limit raises 413 without consuming the stream."""
+    request = _StubRequest({"content-length": str(gateway_api.MAX_BODY_SIZE + 1)}, [])
+    with pytest.raises(OpenAIError) as exc_info:
+        await gateway_api._read_body_limited(request, limit=gateway_api.MAX_BODY_SIZE)
+    assert exc_info.value.status_code == 413
+    assert exc_info.value.code == "body_too_large"
+
+
+async def test_read_body_limited_streaming_over_limit_413() -> None:
+    """Streaming chunks whose cumulative size exceeds the limit raise 413."""
+    request = _StubRequest({}, [b"x" * 64, b"x" * 64])
+    with pytest.raises(OpenAIError) as exc_info:
+        await gateway_api._read_body_limited(request, limit=100)
+    assert exc_info.value.status_code == 413
+
+
+async def test_read_body_limited_at_limit_ok() -> None:
+    """Exactly-at-limit streaming bodies are accepted (boundary check)."""
+    request = _StubRequest({"content-length": "100"}, [b"x" * 100])
+    assert await gateway_api._read_body_limited(request, limit=100) == b"x" * 100
+
+
+async def test_chat_route_oversized_body_413(client, gateway, db, monkeypatch) -> None:
+    _, key = await _admin_and_key(client)
+    await _seed_instance(db, "limit-model", "Limit Model")
+    monkeypatch.setattr(gateway_api, "MAX_JSON_BODY_SIZE", 16)
+    resp = await client.post(
+        "/v1/chat/completions",
+        headers={**auth_headers(key), "content-type": "application/json"},
+        content=b"a" * 17,
+    )
+    assert resp.status_code == 413
+    assert resp.json()["error"]["code"] == "body_too_large"
+    # Rejected before any upstream call or model resolution.
+    assert "url" not in gateway
+
+
+async def test_chat_route_at_limit_not_413(client, gateway, db, monkeypatch) -> None:
+    _, key = await _admin_and_key(client)
+    await _seed_instance(db, "limit-boundary-model", "Limit Boundary Model")
+    monkeypatch.setattr(gateway_api, "MAX_JSON_BODY_SIZE", 16)
+    # Exactly at the limit passes size enforcement; fails later on model parsing.
+    resp = await client.post(
+        "/v1/chat/completions",
+        headers={**auth_headers(key), "content-type": "application/json"},
+        content=b"a" * 16,
+    )
+    assert resp.status_code != 413
+
+
+async def test_audio_route_allows_up_to_limit_rejects_beyond(
+    client, gateway, db, monkeypatch
+) -> None:
+    _, key = await _admin_and_key(client)
+    await _seed_instance(db, "audio-limit-model", "Audio Limit Model")
+    monkeypatch.setattr(gateway_api, "MAX_BODY_SIZE", 64)
+    headers = {**auth_headers(key), "content-type": "multipart/form-data; boundary=x"}
+
+    beyond = await client.post("/v1/audio/transcriptions", headers=headers, content=b"a" * 65)
+    assert beyond.status_code == 413
+    assert beyond.json()["error"]["code"] == "body_too_large"
+
+    at_limit = await client.post("/v1/audio/transcriptions", headers=headers, content=b"a" * 64)
+    # At-limit multipart is malformed → 400-class parse error, NOT a size rejection.
+    assert at_limit.status_code != 413
+
+
+# --- IP pinning end-to-end (security review T3) ---
+
+
+async def _pin_env(monkeypatch) -> None:
+    monkeypatch.setenv("INFERNA_ENV", "production")
+    monkeypatch.setenv("INFERNA_JWT_SECRET", "test-jwt-secret-32chars-long-xxxx")
+    monkeypatch.setenv("INFERNA_ADMIN_PASSWORD", "test-admin-pass-xxxx")
+    monkeypatch.setenv("INFERNA_REGISTRATION_TOKEN", "test-reg-token-xxxx")
+    monkeypatch.setenv("INFERNA_GATEWAY_UPSTREAM_ALLOWLIST", "93.184.216.34")
+    get_settings.cache_clear()
+
+
+def _patch_resolver(monkeypatch) -> None:
+    from inferna_server.services import upstream_guard
+
+    async def fake_resolve(host: str):
+        return [ipaddress.ip_address("93.184.216.34")]
+
+    monkeypatch.setattr(upstream_guard, "resolve_host_ips", fake_resolve)
+
+
+async def test_proxy_pins_resolved_ip_keeps_host_header(client, db, monkeypatch) -> None:
+    """Target URL uses the pinned IP; Host header preserves the original hostname."""
+    await _pin_env(monkeypatch)
+    _patch_resolver(monkeypatch)
+    captured: dict[str, str] = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        captured["host"] = request.headers.get("host", "")
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=SSE_BODY)
+
+    mock = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    app.state.gateway_client = mock
+    try:
+        _, key = await _admin_and_key(client)
+        await _seed_instance(db, "pin-model", "Pin Model", address="example.com")
+        resp = await client.post(
+            "/v1/chat/completions",
+            headers=auth_headers(key),
+            json={"model": "pin-model", "messages": [{"role": "user", "content": "hi"}]},
+        )
+        assert resp.status_code == 200
+        assert captured["url"] == "http://93.184.216.34:8010/v1/chat/completions", (
+            f"target not pinned to resolved IP: {captured['url']}"
+        )
+        assert captured["host"] == "example.com:8010"
+    finally:
+        app.state.gateway_client = None
+        await mock.aclose()
+        get_settings.cache_clear()
+
+
+async def test_proxy_https_no_pin_falls_back_to_hostname(client, db, monkeypatch) -> None:
+    """HTTPS upstreams keep the hostname in the target (SNI); IP pinning skipped."""
+    await _pin_env(monkeypatch)
+    _patch_resolver(monkeypatch)
+    captured: dict[str, str] = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=SSE_BODY)
+
+    mock = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    app.state.gateway_client = mock
+    try:
+        _, key = await _admin_and_key(client)
+        await _seed_instance(
+            db, "https-pin-model", "HTTPS Pin Model", address="https://example.com"
+        )
+        resp = await client.post(
+            "/v1/chat/completions",
+            headers=auth_headers(key),
+            json={"model": "https-pin-model", "messages": [{"role": "user", "content": "hi"}]},
+        )
+        assert resp.status_code == 200
+        assert captured["url"].startswith("https://example.com:"), (
+            f"https target should keep hostname: {captured['url']}"
+        )
+        assert captured["url"].endswith("/v1/chat/completions")
+    finally:
+        app.state.gateway_client = None
+        await mock.aclose()
+        get_settings.cache_clear()

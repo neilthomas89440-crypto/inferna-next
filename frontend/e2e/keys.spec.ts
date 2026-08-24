@@ -8,11 +8,12 @@ async function login(page: Page) {
 }
 
 test("create and revoke an API key", async ({ page }) => {
+  const keyName = `e2e-key-${Date.now()}`;
   await login(page);
   await page.getByRole("link", { name: "API Keys" }).click();
 
   await page.getByRole("button", { name: "New key" }).click();
-  await page.getByLabel("Name").fill("e2e-key");
+  await page.getByLabel("Name").fill(keyName);
   await page.getByRole("button", { name: "Create", exact: true }).click();
 
   // Key shown exactly once, with the inf- prefix.
@@ -22,8 +23,8 @@ test("create and revoke an API key", async ({ page }) => {
   expect(keyText).toMatch(/^inf-[0-9a-f]{32}$/);
   await page.getByRole("button", { name: "Done" }).click();
 
-  // Newest key is the first row (created_at desc); it has a Revoke action.
-  const row = page.locator("tbody tr", { hasText: "e2e-key" }).first();
+  // Unique per-run name: stale revoked rows from earlier runs must not match.
+  const row = page.locator("tbody tr", { hasText: keyName }).first();
   await expect(row).toBeVisible();
   await row.getByRole("button", { name: "Revoke" }).click();
   await page.locator("div.fixed.inset-0").getByRole("button", { name: "Revoke", exact: true }).click();

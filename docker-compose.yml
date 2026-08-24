@@ -27,8 +27,9 @@ services:
       INFERNA_GATEWAY_CONNECT_TIMEOUT: ${INFERNA_GATEWAY_CONNECT_TIMEOUT:-5.0}
       INFERNA_GATEWAY_READ_TIMEOUT: ${INFERNA_GATEWAY_READ_TIMEOUT:-300.0}
       INFERNA_GATEWAY_ENABLED: ${INFERNA_GATEWAY_ENABLED:-true}
-      # Empty = blocked-network policy: no upstreams allowed until an admin
-      # configures them. Co-located demos set host.docker.internal via env.
+      # Empty allowlist = blocked-network policy in production; development stays
+      # permissive (see services/upstream_guard.py). Co-located demos set
+      # host.docker.internal via INFERNA_GATEWAY_UPSTREAM_ALLOWLIST env override.
       INFERNA_GATEWAY_UPSTREAM_ALLOWLIST: ${INFERNA_GATEWAY_UPSTREAM_ALLOWLIST:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"

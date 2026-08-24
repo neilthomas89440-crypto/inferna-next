@@ -440,7 +440,7 @@ async def _relay(resp: httpx.Response, model_name: str, path: str) -> AsyncItera
                     tail.pop(0)
             yield chunk
         _record_usage(model_name, tail)
-    except httpx.TransportError as exc:
+    except (httpx.TransportError, httpx.DecodingError) as exc:
         # Headers are already sent; the only option is logging and ending the stream.
         logger.warning("gateway upstream stream failed", model=model_name, error=str(exc))
     finally:
