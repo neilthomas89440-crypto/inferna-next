@@ -1082,8 +1082,14 @@ async def test_proxy_pins_resolved_ip_keeps_host_header(client, db, monkeypatch)
 
 
 async def test_proxy_https_no_pin_falls_back_to_hostname(client, db, monkeypatch) -> None:
-    """HTTPS upstreams keep the hostname in the target (SNI); IP pinning skipped."""
-    await _pin_env(monkeypatch)
+    """HTTPS upstreams keep the hostname in the target (SNI); IP pinning skipped.
+
+    Runs in development: the hostname itself is the trust anchor there, so the
+    SNI fallback is allowed despite no exact allowlist entry.
+    """
+    monkeypatch.setenv("INFERNA_ENV", "development")
+    monkeypatch.setenv("INFERNA_GATEWAY_UPSTREAM_ALLOWLIST", "")
+    get_settings.cache_clear()
     _patch_resolver(monkeypatch)
     captured: dict[str, str] = {}
 
@@ -1132,3 +1138,71 @@ async def test_proxy_https_ipv6_fallback_rebrackets_host(client, gateway, db) ->
         f"https IPv6 fallback should keep brackets: {gateway['url']}"
     )
     assert gateway["url"].endswith("/v1/chat/completions")
+
+
+async def test_proxy_https_hostname_rejected_without_trust_anchor(
+    client, gateway, db, monkeypatch
+) -> None:
+    """Prod + empty allowlist: HTTPS hostname with valid check-time DNS must 502.
+
+    The SNI fallback would re-resolve DNS at connect time (rebinding TOCTOU), so
+    without a trust anchor the request is rejected before any connection.
+    """
+    monkeypatch.setenv("INFERNA_ENV", "production")
+    monkeypatch.setenv("INFERNA_JWT_SECRET", "test-jwt-secret-32chars-long-xxxx")
+    monkeypatch.setenv("INFERNA_ADMIN_PASSWORD", "test-admin-pass-xxxx")
+    monkeypatch.setenv("INFERNA_REGISTRATION_TOKEN", "test-reg-token-xxxx")
+    monkeypatch.setenv("INFERNA_GATEWAY_UPSTREAM_ALLOWLIST", "")
+    get_settings.cache_clear()
+    _patch_resolver(monkeypatch)
+    try:
+        _, key = await _admin_and_key(client)
+        await _seed_instance(db, "evil-model", "Evil Model", address="https://evil.example")
+        gateway.clear()
+        resp = await client.post(
+            "/v1/chat/completions",
+            headers=auth_headers(key),
+            json={"model": "evil-model", "messages": [{"role": "user", "content": "hi"}]},
+        )
+        assert resp.status_code == 502
+        assert resp.json()["error"]["code"] == "upstream_not_allowed"
+        assert gateway == {}
+    finally:
+        get_settings.cache_clear()
+
+
+async def test_proxy_https_exact_allowlist_hostname_allowed(client, db, monkeypatch) -> None:
+    """Prod: an exactly-allowlisted hostname is a trust anchor — pass-through OK."""
+    await _pin_env(monkeypatch)
+    monkeypatch.setenv("INFERNA_GATEWAY_UPSTREAM_ALLOWLIST", "example.com")
+    get_settings.cache_clear()
+    _patch_resolver(monkeypatch)
+    captured: dict[str, str] = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=SSE_BODY)
+
+    mock = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    app.state.gateway_client = mock
+    try:
+        _, key = await _admin_and_key(client)
+        await _seed_instance(
+            db, "allowlisted-model", "Allowlisted Model", address="https://example.com"
+        )
+        resp = await client.post(
+            "/v1/chat/completions",
+            headers=auth_headers(key),
+            json={
+                "model": "allowlisted-model",
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+        )
+        assert resp.status_code == 200
+        assert captured["url"].startswith("https://example.com:"), (
+            f"allowlisted hostname should pass through: {captured['url']}"
+        )
+    finally:
+        app.state.gateway_client = None
+        await mock.aclose()
+        get_settings.cache_clear()

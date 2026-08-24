@@ -184,6 +184,26 @@ def _ip_allowed_by_allowlist(
     return False
 
 
+def hostname_in_allowlist(host: str, settings: Settings) -> bool:
+    """True if *host* exactly matches a hostname entry of the allowlist."""
+    host_norm = host.lower().rstrip(".")
+    for entry in settings.gateway_upstream_allowlist_entries:
+        if "/" in entry:
+            continue
+        try:
+            ipaddress.ip_address(entry)
+            continue  # IP literal entry, not hostname
+        except ValueError:
+            pass
+        if host_norm == entry.lower().rstrip("."):
+            return True
+    return False
+
+
+# Alias kept for callers referring to the helper by its descriptive name.
+hostname_allowlisted = hostname_in_allowlist
+
+
 def _prefer_ipv4(
     ips: list[ipaddress.IPv4Address | ipaddress.IPv6Address],
 ) -> ipaddress.IPv4Address | ipaddress.IPv6Address:

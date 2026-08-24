@@ -66,6 +66,12 @@ async def revoke_key(
     current: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ApiKey:
+    """Revoke an API key (idempotent).
+
+    POST-with-explicit-verb (not DELETE) is deliberate: revoke is a state
+    transition on a still-existing resource, not deletion; repeat calls are
+    no-ops.
+    """
     key = await db.get(ApiKey, key_id)
     if key is None:
         raise HTTPException(status_code=404, detail="API key not found")

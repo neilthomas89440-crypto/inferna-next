@@ -36,7 +36,11 @@ from inferna_server.services.metrics import (
     inferna_time_to_first_byte_seconds,
     inferna_tokens,
 )
-from inferna_server.services.upstream_guard import _extract_host, resolve_and_validate
+from inferna_server.services.upstream_guard import (
+    _extract_host,
+    hostname_in_allowlist,
+    resolve_and_validate,
+)
 from inferna_server.services.workers_svc import sha256_hex
 
 logger = structlog.get_logger(__name__)
@@ -370,11 +374,12 @@ async def _resolve_target(
     worker = instance.worker
     assert worker is not None  # guaranteed by the guard above
     raw_host = worker.address or worker.hostname
+    settings = get_settings()
     try:
         # Pin the validated IP (or original hostname) so the upstream connection
         # cannot re-resolve DNS at connect time — the SSRF hole where a host
         # resolves to an allowed IP at check time but a blocked IP at connect.
-        validated = await resolve_and_validate(raw_host, get_settings())
+        validated = await resolve_and_validate(raw_host, settings)
     except ValueError as exc:
         logger.warning(
             "gateway upstream target blocked",
@@ -391,11 +396,28 @@ async def _resolve_target(
     # Build target from the pinned address (IP literal or original hostname).
     scheme = raw_host.split("://", 1)[0].lower() if "://" in raw_host else "http"
     if scheme == "https" and validated != _extract_host(raw_host):
-        # Connecting to https://<ip> breaks TLS SNI/hostname verification, so
-        # don't pin the IP for HTTPS upstreams: use the original hostname and
-        # accept a connect-time DNS re-resolution. The SSRF check above still
-        # gates which hostnames/IPs are reachable.
+        # Connecting to https://<ip> breaks TLS SNI/hostname verification, so the
+        # pinned IP cannot be used. Passing the hostname through would re-resolve
+        # DNS at connect time — the rebinding TOCTOU — so that is only acceptable
+        # when the hostname itself is the trust anchor: development mode, or an
+        # exact allowlist entry. Anything else is rejected rather than proxied.
         fallback_host = _extract_host(raw_host)
+        trusted = (
+            settings.environment == "development"
+            or hostname_in_allowlist(fallback_host, settings)
+        )
+        if not trusted:
+            logger.warning(
+                "gateway https upstream rejected (no pin, no trust anchor)",
+                worker=instance.worker.name,
+                host=fallback_host,
+            )
+            raise OpenAIError(
+                502,
+                "https upstream requires an exact allowlist entry",
+                "api_error",
+                "upstream_not_allowed",
+            )
         # _extract_host strips brackets from IPv6 literals; re-add them or the
         # target authority becomes invalid (https://::1:8010/...).
         try:
@@ -411,6 +433,8 @@ async def _resolve_target(
             host=fallback_host,
         )
         validated = fallback_host
+    # Workers must serve the OpenAI-compatible paths under /v1 (see
+    # docs/architecture.md); the gateway prefix is forwarded verbatim.
     target = f"{scheme}://{validated}:{instance.port}{request.url.path}"
     if request.url.query:
         target += f"?{request.url.query}"
