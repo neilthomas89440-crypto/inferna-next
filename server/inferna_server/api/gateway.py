@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
 import re
 import time
@@ -394,12 +395,22 @@ async def _resolve_target(
         # don't pin the IP for HTTPS upstreams: use the original hostname and
         # accept a connect-time DNS re-resolution. The SSRF check above still
         # gates which hostnames/IPs are reachable.
+        fallback_host = _extract_host(raw_host)
+        # _extract_host strips brackets from IPv6 literals; re-add them or the
+        # target authority becomes invalid (https://::1:8010/...).
+        try:
+            ipaddress.ip_address(fallback_host)
+            is_v6 = ":" in fallback_host
+        except ValueError:
+            is_v6 = False
+        if is_v6:
+            fallback_host = f"[{fallback_host}]"
         logger.warning(
             "gateway https upstream not IP-pinned (SNI)",
             worker=instance.worker.name,
-            host=_extract_host(raw_host),
+            host=fallback_host,
         )
-        validated = _extract_host(raw_host)
+        validated = fallback_host
     target = f"{scheme}://{validated}:{instance.port}{request.url.path}"
     if request.url.query:
         target += f"?{request.url.query}"

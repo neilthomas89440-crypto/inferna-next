@@ -293,6 +293,35 @@ async def test_upstream_protocol_error_at_send_502(client, gateway, db) -> None:
         await mock.aclose()
 
 
+async def test_proxy_invalid_url_502(client, gateway, db) -> None:
+    """httpx.InvalidURL from the upstream client hits the shared TransportError catch."""
+    _, key = await _admin_and_key(client)
+    await _seed_instance(db, "invalid-url-model", "Invalid URL Model")
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.InvalidURL("bad url")
+
+    mock = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    app.state.gateway_client = mock
+    try:
+        resp = await client.post(
+            "/v1/chat/completions",
+            headers=auth_headers(key),
+            json={"model": "invalid-url-model"},
+        )
+        assert resp.status_code == 502
+        assert resp.json()["error"]["code"] == "upstream_error"
+        assert (
+            REGISTRY.get_sample_value(
+                "inferna_requests_total", {"model": "invalid-url-model", "status": "502"}
+            )
+            == 1
+        )
+    finally:
+        app.state.gateway_client = None
+        await mock.aclose()
+
+
 async def test_upstream_stream_failure_truncates_without_crash(client, gateway, db) -> None:
     """A mid-stream transport failure ends the stream cleanly (headers already sent)."""
     _, key = await _admin_and_key(client)
