@@ -196,6 +196,14 @@ paths:
       tags:
       - keys
       summary: Revoke Key
+      description: 'Revoke an API key (idempotent).
+
+
+        POST-with-explicit-verb (not DELETE) is deliberate: revoke is a state
+
+        transition on a still-existing resource, not deletion; repeat calls are
+
+        no-ops.'
       operationId: revoke_key_api_v1_keys__key_id__revoke_post
       security:
       - OAuth2PasswordBearer: []
