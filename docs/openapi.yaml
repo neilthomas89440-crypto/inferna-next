@@ -560,12 +560,33 @@ paths:
       - gateway
       summary: Chat Completions
       operationId: chat_completions_v1_chat_completions_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              properties:
+                model:
+                  type: string
+                messages:
+                  items: {}
+                  type: array
+                stream:
+                  type: boolean
+              type: object
+              required:
+              - model
+              - messages
+        required: true
       responses:
         '200':
           description: Success (SSE stream when stream=true)
           content:
             application/json:
               schema: {}
+            text/event-stream:
+              schema:
+                type: string
+                description: SSE stream of JSON chunks
         '400':
           description: "Bad request \u2014 missing or invalid model"
         '401':
@@ -580,6 +601,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+        '413':
+          description: Request body exceeds size limit
         '502':
           description: Upstream unreachable or target not allowed
       security:
@@ -590,6 +613,22 @@ paths:
       - gateway
       summary: Embeddings
       operationId: embeddings_v1_embeddings_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              properties:
+                model:
+                  type: string
+                input:
+                  type: string
+                encoding_format:
+                  type: string
+              type: object
+              required:
+              - model
+              - input
+        required: true
       responses:
         '200':
           description: Success
@@ -610,6 +649,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+        '413':
+          description: Request body exceeds size limit
         '502':
           description: Upstream unreachable or target not allowed
       security:
@@ -620,6 +661,25 @@ paths:
       - gateway
       summary: Audio Transcriptions
       operationId: audio_transcriptions_v1_audio_transcriptions_post
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              properties:
+                model:
+                  type: string
+                file:
+                  type: string
+                  format: binary
+              type: object
+              required:
+              - model
+              - file
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+        required: true
       responses:
         '200':
           description: Success
@@ -640,6 +700,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+        '413':
+          description: Request body exceeds size limit
         '502':
           description: Upstream unreachable or target not allowed
       security:

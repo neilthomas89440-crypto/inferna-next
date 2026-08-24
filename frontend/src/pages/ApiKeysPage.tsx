@@ -12,6 +12,9 @@ export default function ApiKeysPage() {
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // Page-level `error` renders beneath the modal overlays, so dialog failures
+  // need their own state to be visible inside the open dialog.
+  const [modalError, setModalError] = useState<string | null>(null);
   const [created, setCreated] = useState<ApiKeyWithSecret | null>(null);
   const [revoking, setRevoking] = useState<string | null>(null);
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
@@ -22,9 +25,10 @@ export default function ApiKeysPage() {
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setError(null);
+    setModalError(null);
     const trimmed = name.trim();
     if (!trimmed) {
-      setError("Name required");
+      setModalError("Name required");
       return;
     }
     try {
@@ -34,7 +38,9 @@ export default function ApiKeysPage() {
       setCreated(result);
       setCopyState("idle");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Create failed");
+      const message = err instanceof Error ? err.message : "Create failed";
+      setError(message);
+      setModalError(message);
     }
   };
 
@@ -55,7 +61,10 @@ export default function ApiKeysPage() {
         <h1 className="text-xl font-semibold text-slate-800">API Keys</h1>
         <button
           type="button"
-          onClick={() => setCreating(true)}
+          onClick={() => {
+            setModalError(null);
+            setCreating(true);
+          }}
           className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700"
         >
           New key
@@ -107,7 +116,10 @@ export default function ApiKeysPage() {
                   {!k.revoked_at && (
                     <button
                       type="button"
-                      onClick={() => setRevoking(k.id)}
+                      onClick={() => {
+                        setModalError(null);
+                        setRevoking(k.id);
+                      }}
                       className="text-sm text-red-600 hover:underline"
                     >
                       Revoke
@@ -138,7 +150,10 @@ export default function ApiKeysPage() {
               <div className="flex justify-end gap-3">
                 <button
                   type="button"
-                  onClick={() => setCreating(false)}
+                  onClick={() => {
+                    setCreating(false);
+                    setModalError(null);
+                  }}
                   className="rounded-md border border-slate-300 px-4 py-2 text-sm text-slate-600 hover:bg-slate-100"
                 >
                   Cancel
@@ -152,6 +167,11 @@ export default function ApiKeysPage() {
                 </button>
               </div>
             </form>
+            {modalError && (
+              <div className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
+                {modalError}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -206,13 +226,21 @@ export default function ApiKeysPage() {
           confirmLabel="Revoke"
           busy={revokeKey.isPending}
           onConfirm={() => {
+            setModalError(null);
             revokeKey.mutate(revoking, {
-              onSuccess: () => setRevoking(null),
+              onSuccess: () => {
+                setRevoking(null);
+                setModalError(null);
+              },
               onError: (err) =>
-                setError(err instanceof Error ? err.message : "Revoke failed"),
+                setModalError(err instanceof Error ? err.message : "Revoke failed"),
             });
           }}
-          onCancel={() => setRevoking(null)}
+          error={modalError}
+          onCancel={() => {
+            setRevoking(null);
+            setModalError(null);
+          }}
         />
       )}
     </div>

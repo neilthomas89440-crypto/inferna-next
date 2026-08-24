@@ -194,14 +194,44 @@ async def test_allowlist_ip_literal_match(monkeypatch) -> None:
         await assert_upstream_allowed("1.1.1.1", settings)
 
 
-async def test_unresolvable_hostname_allowed(monkeypatch) -> None:
+async def test_unresolvable_hostname_rejected_in_production(monkeypatch) -> None:
     settings = _prod_settings()
 
     async def fake_empty(host: str):
         return []
 
     monkeypatch.setattr(upstream_guard, "resolve_host_ips", fake_empty)
-    # unresolvable → allowed (connection will fail naturally)
+    # Unresolvable in production → reject: passing the hostname through would
+    # re-resolve DNS at connect time (DNS-rebinding bypass).
+    with pytest.raises(ValueError, match="unresolvable"):
+        await assert_upstream_allowed("unresolvable.invalid", settings)
+    with pytest.raises(ValueError, match="unresolvable"):
+        await validate_worker_address("unresolvable.invalid", settings)
+
+
+async def test_unresolvable_hostname_allowed_in_development(monkeypatch) -> None:
+    settings = _dev_settings()
+
+    async def fake_empty(host: str):
+        return []
+
+    monkeypatch.setattr(upstream_guard, "resolve_host_ips", fake_empty)
+    # Dev keeps the old behaviour: pass the hostname through (connection
+    # fails naturally if it truly does not resolve).
     await assert_upstream_allowed("unresolvable.invalid", settings)
     out = await validate_worker_address("unresolvable.invalid", settings)
     assert out == "http://unresolvable.invalid"
+
+
+async def test_allowlisted_hostname_unresolvable_rejected_in_production(
+    monkeypatch,
+) -> None:
+    settings = _prod_settings(gateway_upstream_allowlist="trusted.local")
+
+    async def fake_empty(host: str):
+        return []
+
+    monkeypatch.setattr(upstream_guard, "resolve_host_ips", fake_empty)
+    # Exact allowlist hostname match with DNS failure: no IP to pin → reject.
+    with pytest.raises(ValueError, match="unresolvable"):
+        await assert_upstream_allowed("trusted.local", settings)

@@ -207,11 +207,12 @@ async def resolve_and_validate(target: str, settings: Settings) -> str:
     """Resolve *target*, enforce SSRF policy, and return a pinned connect address.
 
     The returned string is either a concrete IP (IPv6 wrapped in ``[...]``) to
-    connect to, or — for the development / unresolvable-hostname-in-production
-    cases — the original hostname string, which the caller passes through
-    unchanged. Pinning the validated IP in the request URL prevents a
-    connect-time DNS re-resolution: the class of SSRF where a hostname resolves
-    to an allowed IP at check time but to a blocked IP at connect time.
+    connect to, or — in the development unresolvable-hostname case and the
+    HTTPS no-pin case handled by callers — the original hostname string, which
+    the caller passes through unchanged. Pinning the validated IP in the
+    request URL prevents a connect-time DNS re-resolution: the class of SSRF
+    where a hostname resolves to an allowed IP at check time but to a blocked
+    IP at connect time.
 
     Behaviour:
     * Literal IP: checked directly against the allowlist (if set) or blocked
@@ -219,14 +220,15 @@ async def resolve_and_validate(target: str, settings: Settings) -> str:
     * Allowlist set:
         - exact hostname match (case-insensitive, trailing dot stripped) pins
           the first resolved IP without further IP validation — the hostname is
-          the trust anchor;
+          the trust anchor; if DNS fails, reject in production (no IP to pin)
+          and pass the hostname through in development;
         - otherwise EVERY resolved IP must be allowlisted (not ANY): reject if
           any is not; if unresolvable, reject.
     * Allowlist empty + development: return first resolved IP, or the host if
       DNS fails.
-    * Allowlist empty + production: reject if ANY resolved IP is blocked; else
-      return the first non-blocked IP; unresolvable hostnames are allowed (the
-      caller fails naturally at connect time).
+    * Allowlist empty + production: reject if ANY resolved IP is blocked; reject
+      unresolvable hostnames (no IP to validate — allowing them would re-resolve
+      DNS at connect time, a DNS-rebinding bypass).
     """
     host = _extract_host(target)
     allowlist = settings.gateway_upstream_allowlist_entries
@@ -264,7 +266,14 @@ async def resolve_and_validate(target: str, settings: Settings) -> str:
                 ips = await resolve_host_ips(host)
                 if ips:
                     return _ip_to_pin(_prefer_ipv4(ips))
-                return host  # DNS failed: no IP to pin, pass host through
+                # DNS failed: no IP to pin. Passing the hostname through would
+                # re-resolve DNS at connect time (TOCTOU rebinding), so reject
+                # in production; development may pass through.
+                if settings.environment == "production":
+                    raise ValueError(
+                        f"upstream target {host!r} unresolvable (allowlist hostname)"
+                    )
+                return host
         # 2) IP/CIDR match: EVERY resolved IP must be allowlisted.
         ips = await resolve_host_ips(host)
         if not ips:
@@ -286,9 +295,10 @@ async def resolve_and_validate(target: str, settings: Settings) -> str:
     # production: reject if ANY resolved IP is blocked.
     ips = await resolve_host_ips(host)
     if not ips:
-        # Unresolvable hostname with empty allowlist: allow (current behaviour);
-        # the caller fails naturally when the connection cannot be established.
-        return host
+        # Production: an unresolvable hostname cannot be validated here, so the
+        # connection would re-resolve DNS at connect time — the DNS-rebinding
+        # hole where a later lookup returns a blocked (e.g. link-local) address.
+        raise ValueError(f"upstream target {host!r} unresolvable in production")
     for raw_ip in ips:
         ip = _unwrap_ipv4_mapped(raw_ip)
         if _ip_is_blocked(ip):

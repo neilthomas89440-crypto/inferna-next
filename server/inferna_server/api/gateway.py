@@ -9,6 +9,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator
 from datetime import datetime
+from typing import Any
 
 import httpx
 import structlog
@@ -52,6 +53,10 @@ LAST_USED_UPDATE_SECONDS = 60
 MAX_BODY_SIZE = 100 * 1024 * 1024
 # JSON/text payloads (chat, embeddings) are far smaller in practice; cap tighter.
 MAX_JSON_BODY_SIZE = 10 * 1024 * 1024
+# Streaming responses have no total deadline, but a per-read *idle* timeout
+# reaps a stalled upstream; 3600s matches the nginx proxy_read_timeout so a
+# legitimately slow SSE stream is never cut short by either layer.
+STREAM_IDLE_TIMEOUT_SECONDS = 3600.0
 
 # Inferna API key format: inf- + 32 hex chars
 _gateway_bearer = HTTPBearer(
@@ -251,7 +256,18 @@ def _extract_multipart_model(content_type: str, raw_body: bytes) -> str | None:
             "on_end": _noop,
         },
     )
-    parser.write(raw_body)
+    try:
+        parser.write(raw_body)
+    except Exception as exc:
+        # Malformed multipart (bad framing vs the declared boundary; python-
+        # multipart raises ValueError/MultipartError variants) is a client
+        # error like invalid JSON — 400, not an unhandled 500.
+        raise OpenAIError(
+            400,
+            "invalid multipart body",
+            "invalid_request_error",
+            "invalid_request_error",
+        ) from exc
     return model
 
 
@@ -373,6 +389,17 @@ async def _resolve_target(
         ) from exc
     # Build target from the pinned address (IP literal or original hostname).
     scheme = raw_host.split("://", 1)[0].lower() if "://" in raw_host else "http"
+    if scheme == "https" and validated != _extract_host(raw_host):
+        # Connecting to https://<ip> breaks TLS SNI/hostname verification, so
+        # don't pin the IP for HTTPS upstreams: use the original hostname and
+        # accept a connect-time DNS re-resolution. The SSRF check above still
+        # gates which hostnames/IPs are reachable.
+        logger.warning(
+            "gateway https upstream not IP-pinned (SNI)",
+            worker=instance.worker.name,
+            host=_extract_host(raw_host),
+        )
+        validated = _extract_host(raw_host)
     target = f"{scheme}://{validated}:{instance.port}{request.url.path}"
     if request.url.query:
         target += f"?{request.url.query}"
@@ -457,8 +484,11 @@ async def _proxy(
             headers=forwarded_headers,
             # httpx 0.28 dropped send(timeout=); per-request timeouts go through build_request.
             timeout=httpx.Timeout(
+                # Streams: no total deadline, but a generous per-read idle
+                # timeout so a stalled upstream cannot hang forever.
                 None if stream else settings.gateway_read_timeout,
                 connect=settings.gateway_connect_timeout,
+                read=STREAM_IDLE_TIMEOUT_SECONDS if stream else settings.gateway_read_timeout,
             ),
         )
         started = time.monotonic()
@@ -479,8 +509,16 @@ async def _proxy(
         status_code=resp.status_code,
         media_type=resp.headers.get("content-type") or "application/json",
     )
-_CHAT_RESPONSES = {
-    200: {"description": "Success (SSE stream when stream=true)"},
+_CHAT_RESPONSES: dict[int | str, dict[str, Any]] = {
+    200: {
+        "description": "Success (SSE stream when stream=true)",
+        "content": {
+            "application/json": {"schema": {}},
+            "text/event-stream": {
+                "schema": {"type": "string", "description": "SSE stream of JSON chunks"}
+            },
+        },
+    },
     400: {"description": "Bad request — missing or invalid model"},
     401: {"description": "Missing/invalid/revoked/inactive API key"},
     403: {"description": "API key lacks inference scope"},
@@ -493,10 +531,11 @@ _CHAT_RESPONSES = {
             }
         },
     },
+    413: {"description": "Request body exceeds size limit"},
     502: {"description": "Upstream unreachable or target not allowed"},
 }
 
-_EMBEDDING_RESPONSES = {
+_EMBEDDING_RESPONSES: dict[int | str, dict[str, Any]] = {
     200: {"description": "Success"},
     400: {"description": "Bad request — missing or invalid model"},
     401: {"description": "Missing/invalid/revoked/inactive API key"},
@@ -510,10 +549,11 @@ _EMBEDDING_RESPONSES = {
             }
         },
     },
+    413: {"description": "Request body exceeds size limit"},
     502: {"description": "Upstream unreachable or target not allowed"},
 }
 
-_TRANSCRIPTION_RESPONSES = {
+_TRANSCRIPTION_RESPONSES: dict[int | str, dict[str, Any]] = {
     200: {"description": "Success"},
     400: {"description": "Bad request — missing or invalid model"},
     401: {"description": "Missing/invalid/revoked/inactive API key"},
@@ -527,7 +567,65 @@ _TRANSCRIPTION_RESPONSES = {
             }
         },
     },
-    502: {"description": "Upstream unreachable or target not allowed"},
+    413: {"description": "Request body exceeds size limit"},
+    502: {"description": "Upstream unreachable or target not allowed"}
+}
+# Handlers read the raw body and forward it verbatim, so FastAPI cannot infer
+# requestBody from the signatures; declare it via openapi_extra so generated
+# clients send a body (the gateway rejects missing model with 400 otherwise).
+_CHAT_REQUEST_BODY = {
+    "required": True,
+    "content": {
+        "application/json": {
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "model": {"type": "string"},
+                    "messages": {"type": "array", "items": {}},
+                    "stream": {"type": "boolean"},
+                },
+                "required": ["model", "messages"],
+            }
+        }
+    },
+}
+
+_EMBEDDINGS_REQUEST_BODY = {
+    "required": True,
+    "content": {
+        "application/json": {
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "model": {"type": "string"},
+                    "input": {"type": "string"},
+                    "encoding_format": {"type": "string"},
+                },
+                "required": ["model", "input"],
+            }
+        }
+    },
+}
+
+_TRANSCRIPTION_REQUEST_BODY = {
+    "required": True,
+    "content": {
+        # multipart form upload (OpenAI client default)
+        "multipart/form-data": {
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "model": {"type": "string"},
+                    "file": {"type": "string", "format": "binary"},
+                },
+                "required": ["model", "file"],
+            }
+        },
+        # raw audio bytes; model comes via ?model= query param
+        "application/octet-stream": {
+            "schema": {"type": "string", "format": "binary"}
+        },
+    },
 }
 
 _LIST_MODELS_RESPONSES = {
@@ -537,7 +635,11 @@ _LIST_MODELS_RESPONSES = {
 }
 
 
-@router.post("/chat/completions", responses=_CHAT_RESPONSES)  # type: ignore[arg-type]
+@router.post(
+    "/chat/completions",
+    responses=_CHAT_RESPONSES,
+    openapi_extra={"requestBody": _CHAT_REQUEST_BODY},
+)  # type: ignore[arg-type]
 async def chat_completions(
     request: Request,
     key: ApiKey = Depends(get_api_key),
@@ -548,7 +650,11 @@ async def chat_completions(
     return await _proxy(request, raw_body, model_name, db)
 
 
-@router.post("/embeddings", responses=_EMBEDDING_RESPONSES)  # type: ignore[arg-type]
+@router.post(
+    "/embeddings",
+    responses=_EMBEDDING_RESPONSES,
+    openapi_extra={"requestBody": _EMBEDDINGS_REQUEST_BODY},
+)  # type: ignore[arg-type]
 async def embeddings(
     request: Request,
     key: ApiKey = Depends(get_api_key),
@@ -559,7 +665,11 @@ async def embeddings(
     return await _proxy(request, raw_body, model_name, db)
 
 
-@router.post("/audio/transcriptions", responses=_TRANSCRIPTION_RESPONSES)  # type: ignore[arg-type]
+@router.post(
+    "/audio/transcriptions",
+    responses=_TRANSCRIPTION_RESPONSES,
+    openapi_extra={"requestBody": _TRANSCRIPTION_REQUEST_BODY},
+)  # type: ignore[arg-type]
 async def audio_transcriptions(
     request: Request,
     key: ApiKey = Depends(get_api_key),
