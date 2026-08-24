@@ -452,6 +452,7 @@ dependencies = [
     { name = "bcrypt" },
     { name = "fastapi" },
     { name = "grpcio" },
+    { name = "httpx" },
     { name = "prometheus-client" },
     { name = "prometheus-fastapi-instrumentator" },
     { name = "pydantic" },
@@ -467,7 +468,6 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "grpcio-tools" },
-    { name = "httpx" },
     { name = "pyright" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -482,6 +482,7 @@ requires-dist = [
     { name = "bcrypt" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "grpcio" },
+    { name = "httpx", specifier = ">=0.28,<1" },
     { name = "prometheus-client" },
     { name = "prometheus-fastapi-instrumentator" },
     { name = "pydantic" },
@@ -497,7 +498,6 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "grpcio-tools" },
-    { name = "httpx" },
     { name = "pyright" },
     { name = "pytest" },
     { name = "pytest-asyncio" },

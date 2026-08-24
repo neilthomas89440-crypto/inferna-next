@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\rcluster.proto\x12\ninferna.v1\"\x90\x01\n\x0fRegisterRequest\x12\x15\n\rcluster_token\x18\x01 \x01(\t\x12\x10\n\x08hostname\x18\x02 \x01(\t\x12\x13\n\x0bworker_name\x18\x03 \x01(\t\x12\x14\n\x0c\x63luster_name\x18\x04 \x01(\t\x12\x0f\n\x07version\x18\x05 \x01(\t\x12\x18\n\x10protocol_version\x18\x06 \x01(\x05\"Z\n\x10RegisterResponse\x12\x11\n\tworker_id\x18\x01 \x01(\t\x12\x14\n\x0cworker_token\x18\x02 \x01(\t\x12\x1d\n\x15sync_interval_seconds\x18\x03 \x01(\x05\"\x9c\x01\n\x07GPUInfo\x12\r\n\x05index\x18\x01 \x01(\x05\x12\x0e\n\x06vendor\x18\x02 \x01(\t\x12\x0c\n\x04name\x18\x03 \x01(\t\x12\x0f\n\x07vram_mb\x18\x04 \x01(\x04\x12\x14\n\x0cused_vram_mb\x18\x05 \x01(\x04\x12\x17\n\x0futilization_pct\x18\x06 \x01(\x05\x12\x0c\n\x04uuid\x18\x07 \x01(\t\x12\x16\n\x0e\x64river_version\x18\x08 \x01(\t\"P\n\nSystemInfo\x12\x11\n\tcpu_cores\x18\x01 \x01(\r\x12\x11\n\tmemory_mb\x18\x02 \x01(\x04\x12\n\n\x02os\x18\x03 \x01(\t\x12\x10\n\x08hostname\x18\x04 \x01(\t\"f\n\x0eInstanceStatus\x12\x13\n\x0binstance_id\x18\x01 \x01(\t\x12\r\n\x05state\x18\x02 \x01(\t\x12\x0e\n\x06\x64\x65tail\x18\x03 \x01(\t\x12\x0c\n\x04port\x18\x04 \x01(\x05\x12\x12\n\ngeneration\x18\x05 \x01(\x03\"\x9b\x01\n\x0c\x45ngineConfig\x12\x0e\n\x06\x65ngine\x18\x01 \x01(\t\x12\x12\n\nmodel_name\x18\x02 \x01(\t\x12\x0f\n\x07profile\x18\x03 \x01(\t\x12\x13\n\x0bgpu_indexes\x18\x04 \x03(\x05\x12\x18\n\x10vram_required_mb\x18\x05 \x01(\x04\x12\x0c\n\x04port\x18\x06 \x01(\x05\x12\x19\n\x11requires_hf_token\x18\x07 \x01(\x08\"t\n\x0fInstanceCommand\x12\x13\n\x0binstance_id\x18\x01 \x01(\t\x12\x0e\n\x06\x61\x63tion\x18\x02 \x01(\t\x12(\n\x06\x63onfig\x18\x03 \x01(\x0b\x32\x18.inferna.v1.EngineConfig\x12\x12\n\ngeneration\x18\x04 \x01(\x03\"\xb0\x01\n\x0bSyncRequest\x12\x11\n\tworker_id\x18\x01 \x01(\t\x12\x14\n\x0cworker_token\x18\x02 \x01(\t\x12&\n\x06system\x18\x03 \x01(\x0b\x32\x16.inferna.v1.SystemInfo\x12!\n\x04gpus\x18\x04 \x03(\x0b\x32\x13.inferna.v1.GPUInfo\x12-\n\tinstances\x18\x05 \x03(\x0b\x32\x1a.inferna.v1.InstanceStatus\"=\n\x0cSyncResponse\x12-\n\x08\x63ommands\x18\x01 \x03(\x0b\x32\x1b.inferna.v1.InstanceCommand2\x91\x01\n\rWorkerService\x12\x45\n\x08Register\x12\x1b.inferna.v1.RegisterRequest\x1a\x1c.inferna.v1.RegisterResponse\x12\x39\n\x04Sync\x12\x17.inferna.v1.SyncRequest\x1a\x18.inferna.v1.SyncResponseb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\rcluster.proto\x12\ninferna.v1\"\xa1\x01\n\x0fRegisterRequest\x12\x15\n\rcluster_token\x18\x01 \x01(\t\x12\x10\n\x08hostname\x18\x02 \x01(\t\x12\x13\n\x0bworker_name\x18\x03 \x01(\t\x12\x14\n\x0c\x63luster_name\x18\x04 \x01(\t\x12\x0f\n\x07version\x18\x05 \x01(\t\x12\x18\n\x10protocol_version\x18\x06 \x01(\x05\x12\x0f\n\x07\x61\x64\x64ress\x18\x07 \x01(\t\"Z\n\x10RegisterResponse\x12\x11\n\tworker_id\x18\x01 \x01(\t\x12\x14\n\x0cworker_token\x18\x02 \x01(\t\x12\x1d\n\x15sync_interval_seconds\x18\x03 \x01(\x05\"\x9c\x01\n\x07GPUInfo\x12\r\n\x05index\x18\x01 \x01(\x05\x12\x0e\n\x06vendor\x18\x02 \x01(\t\x12\x0c\n\x04name\x18\x03 \x01(\t\x12\x0f\n\x07vram_mb\x18\x04 \x01(\x04\x12\x14\n\x0cused_vram_mb\x18\x05 \x01(\x04\x12\x17\n\x0futilization_pct\x18\x06 \x01(\x05\x12\x0c\n\x04uuid\x18\x07 \x01(\t\x12\x16\n\x0e\x64river_version\x18\x08 \x01(\t\"P\n\nSystemInfo\x12\x11\n\tcpu_cores\x18\x01 \x01(\r\x12\x11\n\tmemory_mb\x18\x02 \x01(\x04\x12\n\n\x02os\x18\x03 \x01(\t\x12\x10\n\x08hostname\x18\x04 \x01(\t\"f\n\x0eInstanceStatus\x12\x13\n\x0binstance_id\x18\x01 \x01(\t\x12\r\n\x05state\x18\x02 \x01(\t\x12\x0e\n\x06\x64\x65tail\x18\x03 \x01(\t\x12\x0c\n\x04port\x18\x04 \x01(\x05\x12\x12\n\ngeneration\x18\x05 \x01(\x03\"\x9b\x01\n\x0c\x45ngineConfig\x12\x0e\n\x06\x65ngine\x18\x01 \x01(\t\x12\x12\n\nmodel_name\x18\x02 \x01(\t\x12\x0f\n\x07profile\x18\x03 \x01(\t\x12\x13\n\x0bgpu_indexes\x18\x04 \x03(\x05\x12\x18\n\x10vram_required_mb\x18\x05 \x01(\x04\x12\x0c\n\x04port\x18\x06 \x01(\x05\x12\x19\n\x11requires_hf_token\x18\x07 \x01(\x08\"t\n\x0fInstanceCommand\x12\x13\n\x0binstance_id\x18\x01 \x01(\t\x12\x0e\n\x06\x61\x63tion\x18\x02 \x01(\t\x12(\n\x06\x63onfig\x18\x03 \x01(\x0b\x32\x18.inferna.v1.EngineConfig\x12\x12\n\ngeneration\x18\x04 \x01(\x03\"\xb0\x01\n\x0bSyncRequest\x12\x11\n\tworker_id\x18\x01 \x01(\t\x12\x14\n\x0cworker_token\x18\x02 \x01(\t\x12&\n\x06system\x18\x03 \x01(\x0b\x32\x16.inferna.v1.SystemInfo\x12!\n\x04gpus\x18\x04 \x03(\x0b\x32\x13.inferna.v1.GPUInfo\x12-\n\tinstances\x18\x05 \x03(\x0b\x32\x1a.inferna.v1.InstanceStatus\"=\n\x0cSyncResponse\x12-\n\x08\x63ommands\x18\x01 \x03(\x0b\x32\x1b.inferna.v1.InstanceCommand2\x91\x01\n\rWorkerService\x12\x45\n\x08Register\x12\x1b.inferna.v1.RegisterRequest\x1a\x1c.inferna.v1.RegisterResponse\x12\x39\n\x04Sync\x12\x17.inferna.v1.SyncRequest\x1a\x18.inferna.v1.SyncResponseb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -32,23 +32,23 @@ _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'cluster_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
   _globals['_REGISTERREQUEST']._serialized_start=30
-  _globals['_REGISTERREQUEST']._serialized_end=174
-  _globals['_REGISTERRESPONSE']._serialized_start=176
-  _globals['_REGISTERRESPONSE']._serialized_end=266
-  _globals['_GPUINFO']._serialized_start=269
-  _globals['_GPUINFO']._serialized_end=425
-  _globals['_SYSTEMINFO']._serialized_start=427
-  _globals['_SYSTEMINFO']._serialized_end=507
-  _globals['_INSTANCESTATUS']._serialized_start=509
-  _globals['_INSTANCESTATUS']._serialized_end=611
-  _globals['_ENGINECONFIG']._serialized_start=614
-  _globals['_ENGINECONFIG']._serialized_end=769
-  _globals['_INSTANCECOMMAND']._serialized_start=771
-  _globals['_INSTANCECOMMAND']._serialized_end=887
-  _globals['_SYNCREQUEST']._serialized_start=890
-  _globals['_SYNCREQUEST']._serialized_end=1066
-  _globals['_SYNCRESPONSE']._serialized_start=1068
-  _globals['_SYNCRESPONSE']._serialized_end=1129
-  _globals['_WORKERSERVICE']._serialized_start=1132
-  _globals['_WORKERSERVICE']._serialized_end=1277
+  _globals['_REGISTERREQUEST']._serialized_end=191
+  _globals['_REGISTERRESPONSE']._serialized_start=193
+  _globals['_REGISTERRESPONSE']._serialized_end=283
+  _globals['_GPUINFO']._serialized_start=286
+  _globals['_GPUINFO']._serialized_end=442
+  _globals['_SYSTEMINFO']._serialized_start=444
+  _globals['_SYSTEMINFO']._serialized_end=524
+  _globals['_INSTANCESTATUS']._serialized_start=526
+  _globals['_INSTANCESTATUS']._serialized_end=628
+  _globals['_ENGINECONFIG']._serialized_start=631
+  _globals['_ENGINECONFIG']._serialized_end=786
+  _globals['_INSTANCECOMMAND']._serialized_start=788
+  _globals['_INSTANCECOMMAND']._serialized_end=904
+  _globals['_SYNCREQUEST']._serialized_start=907
+  _globals['_SYNCREQUEST']._serialized_end=1083
+  _globals['_SYNCRESPONSE']._serialized_start=1085
+  _globals['_SYNCRESPONSE']._serialized_end=1146
+  _globals['_WORKERSERVICE']._serialized_start=1149
+  _globals['_WORKERSERVICE']._serialized_end=1294
 # @@protoc_insertion_point(module_scope)

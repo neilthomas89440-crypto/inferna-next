@@ -6,6 +6,7 @@ import asyncio
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
+import httpx
 import structlog
 from alembic.config import Config
 from alembic.script import ScriptDirectory
@@ -16,6 +17,8 @@ from prometheus_fastapi_instrumentator import Instrumentator
 from sqlalchemy import select, text
 
 from inferna_server.api import api_router
+from inferna_server.api import gateway as gateway_api
+from inferna_server.api.gateway import OpenAIError, flush_last_used_stamps, openai_error_handler
 from inferna_server.auth import hash_password
 from inferna_server.config import get_settings
 from inferna_server.db import SessionLocal
@@ -88,6 +91,16 @@ async def readiness_loop(app: FastAPI) -> None:
             break
 
 
+async def last_used_flush_loop() -> None:
+    while True:
+        try:
+            async with SessionLocal() as db:
+                await flush_last_used_stamps(db)
+        except Exception:  # noqa: BLE001
+            logger.exception("last_used stamp flush failed")
+        await asyncio.sleep(60)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await _check_schema()
@@ -96,13 +109,25 @@ async def lifespan(app: FastAPI):
     app.state.ready = (False, "starting")
     grpc_task = asyncio.create_task(serve_grpc(app))
     readiness_task = asyncio.create_task(readiness_loop(app))
+    flush_task = asyncio.create_task(last_used_flush_loop())
     app.state.grpc_task = grpc_task
     app.state.readiness_task = readiness_task
-    logger.info("startup complete", grpc_port=get_settings().grpc_port)
+    app.state.flush_task = flush_task
+    settings = get_settings()
+    app.state.gateway_client = httpx.AsyncClient(
+        timeout=httpx.Timeout(
+            settings.gateway_read_timeout, connect=settings.gateway_connect_timeout
+        )
+    )
+    logger.info("startup complete", grpc_port=settings.grpc_port)
     try:
         yield
     finally:
-        for t in (grpc_task, readiness_task):
+        gateway_client = getattr(app.state, "gateway_client", None)
+        if gateway_client is not None:
+            with suppress(Exception):  # noqa: BLE001
+                await gateway_client.aclose()
+        for t in (grpc_task, readiness_task, flush_task):
             t.cancel()
             with suppress(asyncio.CancelledError):
                 try:
@@ -111,6 +136,10 @@ async def lifespan(app: FastAPI):
                     pass
                 except asyncio.CancelledError:
                     pass
+        # Final best-effort flush of pending last_used stamps.
+        with suppress(Exception):  # noqa: BLE001
+            async with SessionLocal() as db:
+                await flush_last_used_stamps(db)
 
 
 async def _seed() -> None:
@@ -147,6 +176,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(api_router)
+if settings.gateway_enabled:
+    app.include_router(gateway_api.router)
+    app.add_exception_handler(OpenAIError, openai_error_handler)
 Instrumentator().instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
 
 

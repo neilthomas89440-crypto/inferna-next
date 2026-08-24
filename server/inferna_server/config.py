@@ -16,6 +16,7 @@ class Settings(BaseSettings):
         env_prefix="INFERNA_",
         env_file=(".env", "../.env"),
         extra="ignore",
+        populate_by_name=True,
     )
 
     # --- server ---
@@ -29,8 +30,11 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:5173,http://localhost:8080"
     instance_port_range_start: int = 8010
     instance_port_range_end: int = 8100
+    gateway_connect_timeout: float = 5.0
+    gateway_read_timeout: float = 300.0
+    gateway_enabled: bool = True
+    gateway_upstream_allowlist: str = ""
     log_level: str = "info"
-
     @model_validator(mode="after")
     def _check_production_secrets(self):
         if self.environment == "production":
@@ -50,6 +54,10 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    @property
+    def gateway_upstream_allowlist_entries(self) -> list[str]:
+        return [e.strip() for e in self.gateway_upstream_allowlist.split(",") if e.strip()]
 
     @property
     def instance_port_range(self) -> range:

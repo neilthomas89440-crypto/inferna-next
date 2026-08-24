@@ -82,6 +82,7 @@ class Worker(Base):
     cpu_cores: Mapped[int | None] = mapped_column(Integer, nullable=True)
     memory_mb: Mapped[int | None] = mapped_column(Integer, nullable=True)
     token_hash: Mapped[str] = mapped_column(String(64))  # sha256 hex of worker token
+    address: Mapped[str | None] = mapped_column(String(255), nullable=True)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -139,6 +140,23 @@ class Model(Base):
     is_builtin: Mapped[bool] = mapped_column(Boolean, default=False)
     supported_engines: Mapped[list[str]] = mapped_column(JSON, default=list, server_default="[]")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ApiKey(Base, TimestampMixin):
+    __tablename__ = "api_keys"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(64))
+    key_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    scopes: Mapped[list[str]] = mapped_column(JSON, default=list, server_default="[]")
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    user: Mapped[User] = relationship()
+
 
 class ModelInstance(Base, TimestampMixin):
     __tablename__ = "model_instances"

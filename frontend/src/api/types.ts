@@ -13,6 +13,21 @@ export interface User {
   is_active: boolean;
 }
 
+export interface ApiKey {
+  id: string;
+  user_id: string;
+  name: string;
+  scopes: string[];
+  created_at: string;
+  updated_at: string;
+  last_used_at: string | null;
+  revoked_at: string | null;
+}
+
+export interface ApiKeyWithSecret extends ApiKey {
+  key: string;
+}
+
 export interface Cluster {
   id: string;
   name: string;

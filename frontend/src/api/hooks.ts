@@ -1,6 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client";
 import type {
+  ApiKey,
+  ApiKeyWithSecret,
   Cluster,
   Dashboard,
   DeployRequest,
@@ -160,5 +162,26 @@ export function useDashboard() {
     queryKey: ["dashboard"],
     queryFn: () => api<Dashboard>("/dashboard"),
     refetchInterval: LIVE_INTERVAL,
+  });
+}
+
+export function useApiKeys() {
+  return useQuery({ queryKey: ["keys"], queryFn: () => api<ApiKey[]>("/keys"), refetchInterval: LIVE_INTERVAL });
+}
+
+export function useCreateApiKey() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { name: string }) =>
+      api<ApiKeyWithSecret>("/keys", { method: "POST", body: JSON.stringify(body) }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["keys"] }),
+  });
+}
+
+export function useRevokeApiKey() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api<ApiKey>(`/keys/${id}/revoke`, { method: "POST" }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["keys"] }),
   });
 }

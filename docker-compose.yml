@@ -24,6 +24,15 @@ services:
       INFERNA_JWT_SECRET: ${INFERNA_JWT_SECRET:-inferna-dev-secret}
       INFERNA_REGISTRATION_TOKEN: ${INFERNA_REGISTRATION_TOKEN:-inferna-registration-token}
       INFERNA_ADMIN_PASSWORD: ${INFERNA_ADMIN_PASSWORD:-inferna}
+      INFERNA_GATEWAY_CONNECT_TIMEOUT: ${INFERNA_GATEWAY_CONNECT_TIMEOUT:-5.0}
+      INFERNA_GATEWAY_READ_TIMEOUT: ${INFERNA_GATEWAY_READ_TIMEOUT:-300.0}
+      INFERNA_GATEWAY_ENABLED: ${INFERNA_GATEWAY_ENABLED:-true}
+      # Empty allowlist = blocked-network policy in production; development stays
+      # permissive (see services/upstream_guard.py). Co-located demos set
+      # host.docker.internal via INFERNA_GATEWAY_UPSTREAM_ALLOWLIST env override.
+      INFERNA_GATEWAY_UPSTREAM_ALLOWLIST: ${INFERNA_GATEWAY_UPSTREAM_ALLOWLIST:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       postgres:
         condition: service_healthy
@@ -41,6 +50,7 @@ services:
       INFERNA_REGISTRATION_TOKEN: ${INFERNA_REGISTRATION_TOKEN:-inferna-registration-token}
       INFERNA_MODELS_DIR: /models
       INFERNA_HF_TOKEN: ${INFERNA_HF_TOKEN:-}
+      INFERNA_WORKER_ADDRESS: host.docker.internal
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - inferna-models:/models
