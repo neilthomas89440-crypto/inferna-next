@@ -282,3 +282,25 @@ async def test_prod_empty_allowlist_any_blocked_rejected(monkeypatch) -> None:
     _patched_resolver(monkeypatch, ["8.8.8.8", "169.254.169.254"])
     with pytest.raises(ValueError, match="blocked"):
         await assert_upstream_allowed("mixed.example", settings)
+
+
+async def test_allowlist_multi_ip_success_prefers_ipv4(monkeypatch) -> None:
+    """Multi-IP success: the connect pin prefers the first allowlisted IPv4."""
+    settings = _prod_settings(gateway_upstream_allowlist="8.8.8.8/32,fd00::/8")
+
+    async def fake_resolve(host: str):
+        return [ipaddress.IPv6Address("fd00::1"), ipaddress.IPv4Address("8.8.8.8")]
+
+    monkeypatch.setattr(upstream_guard, "resolve_host_ips", fake_resolve)
+    assert await upstream_guard.resolve_and_validate("dual.example", settings) == "8.8.8.8"
+
+
+async def test_allowlist_ipv6_only_success_pins_bracketed(monkeypatch) -> None:
+    """IPv6-only resolution pins a bracketed literal for URL authority use."""
+    settings = _prod_settings(gateway_upstream_allowlist="fd00::/8")
+
+    async def fake_resolve(host: str):
+        return [ipaddress.IPv6Address("fd00::1")]
+
+    monkeypatch.setattr(upstream_guard, "resolve_host_ips", fake_resolve)
+    assert await upstream_guard.resolve_and_validate("v6.example", settings) == "[fd00::1]"

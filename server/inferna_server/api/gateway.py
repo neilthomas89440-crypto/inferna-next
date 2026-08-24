@@ -290,7 +290,7 @@ async def _extract_model(request: Request, raw_body: bytes) -> str:
                 )
             model = payload["model"]
     elif lowered.startswith("multipart/form-data"):
-        model = _extract_multipart_model(content_type, raw_body)
+        model = await asyncio.to_thread(_extract_multipart_model, content_type, raw_body)
     if model is None:
         model = request.query_params.get("model")
     if not model:

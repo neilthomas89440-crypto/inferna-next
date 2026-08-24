@@ -322,6 +322,36 @@ async def test_proxy_invalid_url_502(client, gateway, db) -> None:
         await mock.aclose()
 
 
+
+async def test_proxy_oversized_hostname_invalid_url_502(client, gateway, db, monkeypatch) -> None:
+    """Organic httpx.InvalidURL: a worker address that fails IDNA at build_request."""
+    from inferna_server.services import upstream_guard
+
+    async def fake_resolve(host: str):
+        return []  # dev: unresolvable hostname passes through unchanged
+
+    monkeypatch.setattr(upstream_guard, "resolve_host_ips", fake_resolve)
+    _, key = await _admin_and_key(client)
+    # Non-ASCII label survives the SSRF guard's dev pass-through but httpx
+    # build_request raises InvalidURL ("Invalid IDNA hostname") organically —
+    # no mock-side raise needed.
+    idna_host = "http://" + "中" * 64 + ".test"
+    await _seed_instance(db, "idna-invalid-url-model", "IDNA Invalid URL Model", address=idna_host)
+    resp = await client.post(
+        "/v1/chat/completions",
+        headers=auth_headers(key),
+        json={"model": "idna-invalid-url-model"},
+    )
+    assert resp.status_code == 502
+    assert resp.json()["error"]["code"] == "upstream_error"
+    assert (
+        REGISTRY.get_sample_value(
+            "inferna_requests_total", {"model": "idna-invalid-url-model", "status": "502"}
+        )
+        == 1
+    )
+
+
 async def test_upstream_stream_failure_truncates_without_crash(client, gateway, db) -> None:
     """A mid-stream transport failure ends the stream cleanly (headers already sent)."""
     _, key = await _admin_and_key(client)
@@ -1082,3 +1112,23 @@ async def test_proxy_https_no_pin_falls_back_to_hostname(client, db, monkeypatch
         app.state.gateway_client = None
         await mock.aclose()
         get_settings.cache_clear()
+
+
+async def test_proxy_https_ipv6_fallback_rebrackets_host(client, gateway, db) -> None:
+    """HTTPS + IPv6 literal upstream: the fallback target keeps the host bracketed."""
+    _, key = await _admin_and_key(client)
+    # Dev, empty allowlist: resolve_and_validate returns "[::1]" (pinned,
+    # bracketed by _ip_to_pin); that differs from the stripped "::1" from
+    # _extract_host, so the SNI fallback fires and must re-bracket the
+    # literal or the target authority becomes invalid (https://::1:8010/...).
+    await _seed_instance(db, "https-v6-model", "HTTPS V6 Model", address="https://[::1]")
+    resp = await client.post(
+        "/v1/chat/completions",
+        headers=auth_headers(key),
+        json={"model": "https-v6-model", "messages": [{"role": "user", "content": "hi"}]},
+    )
+    assert resp.status_code == 200
+    assert gateway["url"].startswith("https://[::1]:8010/"), (
+        f"https IPv6 fallback should keep brackets: {gateway['url']}"
+    )
+    assert gateway["url"].endswith("/v1/chat/completions")
