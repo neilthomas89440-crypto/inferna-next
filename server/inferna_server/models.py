@@ -60,6 +60,7 @@ class Cluster(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     workers: Mapped[list[Worker]] = relationship(back_populates="cluster")
+    deployments: Mapped[list[Deployment]] = relationship(back_populates="cluster")
 
 
 class Worker(Base):
@@ -140,6 +141,7 @@ class Model(Base):
     is_builtin: Mapped[bool] = mapped_column(Boolean, default=False)
     supported_engines: Mapped[list[str]] = mapped_column(JSON, default=list, server_default="[]")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    deployments: Mapped[list[Deployment]] = relationship(back_populates="model")
 
 
 class ApiKey(Base, TimestampMixin):
@@ -156,6 +158,43 @@ class ApiKey(Base, TimestampMixin):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     user: Mapped[User] = relationship()
+
+class Deployment(Base):
+    __tablename__ = "deployments"
+    __table_args__ = (
+        CheckConstraint("engine IN ('vllm','sglang')", name="ck_deployments_engine"),
+        CheckConstraint("profile IN ('latency','throughput')", name="ck_deployments_profile"),
+        CheckConstraint(
+            "min_replicas >= 1 AND max_replicas >= min_replicas AND max_replicas <= 8",
+            name="ck_deployments_min_max",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    model_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("models.id", ondelete="RESTRICT"), index=True
+    )
+    cluster_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("clusters.id", ondelete="CASCADE"), index=True
+    )
+    engine: Mapped[str] = mapped_column(String(16))
+    profile: Mapped[str] = mapped_column(String(16))
+    min_replicas: Mapped[int] = mapped_column(default=1)
+    max_replicas: Mapped[int] = mapped_column(default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    # Written by apply_scale under the same commit as the replica change; NULL until the
+    # first scale so it never implies a cooldown. Read by autoscaler cooldown in Release B.
+    last_scaled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    model: Mapped[Model] = relationship(back_populates="deployments")
+    cluster: Mapped[Cluster] = relationship(back_populates="deployments")
+    instances: Mapped[list[ModelInstance]] = relationship(
+        back_populates="deployment",
+        cascade="all, delete-orphan",
+        order_by="ModelInstance.created_at",
+    )
 
 
 class ModelInstance(Base, TimestampMixin):
@@ -198,6 +237,9 @@ class ModelInstance(Base, TimestampMixin):
     worker_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("workers.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    deployment_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("deployments.id", ondelete="CASCADE"), index=True
+    )
     engine: Mapped[str] = mapped_column(String(16))  # vllm | sglang
     profile: Mapped[str] = mapped_column(String(16))  # latency | throughput
     gpu_indexes: Mapped[list[int]] = mapped_column(JSON)
@@ -215,3 +257,4 @@ class ModelInstance(Base, TimestampMixin):
     model: Mapped[Model] = relationship()
     cluster: Mapped[Cluster] = relationship()
     worker: Mapped[Worker | None] = relationship(back_populates="instances")
+    deployment: Mapped[Deployment] = relationship(back_populates="instances")

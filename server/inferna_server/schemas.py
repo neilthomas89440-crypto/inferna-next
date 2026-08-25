@@ -95,6 +95,7 @@ class GPUOut(ORMModel):
 
 class InstanceOut(ORMModel):
     id: uuid.UUID
+    deployment_id: uuid.UUID
     model_id: uuid.UUID
     cluster_id: uuid.UUID
     worker_id: uuid.UUID | None
@@ -157,7 +158,25 @@ class DeployRequest(BaseModel):
     cluster_id: uuid.UUID
     engine: Literal["vllm", "sglang"]
     profile: Literal["latency", "throughput"]
+    replicas: int = Field(default=1, ge=1, le=8)
     gpu_selection: ManualGpuSelection | Literal["auto"] = "auto"
+
+
+class ScaleRequest(BaseModel):
+    replicas: int = Field(ge=1, le=8)
+
+
+class DeploymentOut(ORMModel):
+    id: uuid.UUID
+    model_id: uuid.UUID
+    cluster_id: uuid.UUID
+    engine: str
+    profile: str
+    min_replicas: int
+    max_replicas: int
+    created_at: datetime
+    model: ModelOut | None = None
+    instances: list[InstanceOut] = []
 
 
 # --- dashboard ---
@@ -175,3 +194,4 @@ class DashboardOut(BaseModel):
 
 InstanceOut.model_rebuild()
 WorkerOut.model_rebuild()
+DeploymentOut.model_rebuild()

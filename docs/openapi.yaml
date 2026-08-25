@@ -440,7 +440,10 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/InstanceOut'
+                items:
+                  $ref: '#/components/schemas/InstanceOut'
+                type: array
+                title: Response Deploy Api V1 Model Instances Post
         '422':
           description: Validation Error
           content:
@@ -523,6 +526,84 @@ paths:
           type: string
           format: uuid
           title: Instance Id
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/deployments:
+    get:
+      tags:
+      - deployments
+      summary: List Deployments
+      operationId: list_deployments_api_v1_deployments_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/DeploymentOut'
+                type: array
+                title: Response List Deployments Api V1 Deployments Get
+      security:
+      - OAuth2PasswordBearer: []
+  /api/v1/deployments/{deployment_id}/scale:
+    post:
+      tags:
+      - deployments
+      summary: Scale Deployment
+      operationId: scale_deployment_api_v1_deployments__deployment_id__scale_post
+      security:
+      - OAuth2PasswordBearer: []
+      parameters:
+      - name: deployment_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Deployment Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScaleRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeploymentOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/deployments/{deployment_id}:
+    delete:
+      tags:
+      - deployments
+      summary: Delete Deployment
+      operationId: delete_deployment_api_v1_deployments__deployment_id__delete
+      security:
+      - OAuth2PasswordBearer: []
+      parameters:
+      - name: deployment_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Deployment Id
       responses:
         '204':
           description: Successful Response
@@ -1036,6 +1117,12 @@ components:
           - latency
           - throughput
           title: Profile
+        replicas:
+          type: integer
+          maximum: 8.0
+          minimum: 1.0
+          title: Replicas
+          default: 1
         gpu_selection:
           anyOf:
           - $ref: '#/components/schemas/ManualGpuSelection'
@@ -1050,6 +1137,57 @@ components:
       - engine
       - profile
       title: DeployRequest
+    DeploymentOut:
+      properties:
+        id:
+          type: string
+          format: uuid
+          title: Id
+        model_id:
+          type: string
+          format: uuid
+          title: Model Id
+        cluster_id:
+          type: string
+          format: uuid
+          title: Cluster Id
+        engine:
+          type: string
+          title: Engine
+        profile:
+          type: string
+          title: Profile
+        min_replicas:
+          type: integer
+          title: Min Replicas
+        max_replicas:
+          type: integer
+          title: Max Replicas
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+        model:
+          anyOf:
+          - $ref: '#/components/schemas/ModelOut'
+          - type: 'null'
+        instances:
+          items:
+            $ref: '#/components/schemas/InstanceOut'
+          type: array
+          title: Instances
+          default: []
+      type: object
+      required:
+      - id
+      - model_id
+      - cluster_id
+      - engine
+      - profile
+      - min_replicas
+      - max_replicas
+      - created_at
+      title: DeploymentOut
     GPUOut:
       properties:
         id:
@@ -1110,6 +1248,10 @@ components:
           type: string
           format: uuid
           title: Id
+        deployment_id:
+          type: string
+          format: uuid
+          title: Deployment Id
         model_id:
           type: string
           format: uuid
@@ -1174,6 +1316,7 @@ components:
       type: object
       required:
       - id
+      - deployment_id
       - model_id
       - cluster_id
       - worker_id
@@ -1287,6 +1430,17 @@ components:
       required:
       - password
       title: PasswordChange
+    ScaleRequest:
+      properties:
+        replicas:
+          type: integer
+          maximum: 8.0
+          minimum: 1.0
+          title: Replicas
+      type: object
+      required:
+      - replicas
+      title: ScaleRequest
     TokenResponse:
       properties:
         access_token:

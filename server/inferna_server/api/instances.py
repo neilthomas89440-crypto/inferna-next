@@ -12,9 +12,9 @@ from sqlalchemy.orm import selectinload
 
 from inferna_server.auth import get_current_user
 from inferna_server.db import get_db
-from inferna_server.models import Cluster, Model, ModelInstance, User
+from inferna_server.models import Cluster, Deployment, Model, ModelInstance, User
 from inferna_server.schemas import DeployRequest, InstanceOut, ManualGpuSelection
-from inferna_server.services.scheduler import allocate_auto, allocate_manual
+from inferna_server.services.scheduler import allocate_manual, allocate_replicas
 
 router = APIRouter(prefix="/model-instances", tags=["instances"])
 
@@ -38,12 +38,12 @@ async def list_instances(
     return _with_names(list(rows.scalars().all()))
 
 
-@router.post("", response_model=InstanceOut, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=list[InstanceOut], status_code=status.HTTP_201_CREATED)
 async def deploy(
     body: DeployRequest,
     _: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> ModelInstance:
+) -> list[ModelInstance]:
     model = await db.get(Model, body.model_id)
     if model is None:
         raise HTTPException(status_code=404, detail="model not found")
@@ -54,6 +54,10 @@ async def deploy(
         raise HTTPException(
             status_code=400,
             detail=f"engine '{body.engine}' does not support category '{model.category}'",
+        )
+    if isinstance(body.gpu_selection, ManualGpuSelection) and body.replicas != 1:
+        raise HTTPException(
+            status_code=400, detail="manual gpu selection supports a single replica"
         )
 
     try:
@@ -66,31 +70,45 @@ async def deploy(
                 model.vram_required_mb,
                 body.engine,
             )
+            allocations = [(worker, gpu_indexes, port)]
         else:
-            worker, gpu_indexes, port = await allocate_auto(
-                db, body.cluster_id, model.vram_required_mb, body.engine
+            allocations = await allocate_replicas(
+                db, cluster.id, model.vram_required_mb, body.engine, body.replicas, used=set()
             )
-        instance = ModelInstance(
+        deployment = Deployment(
             model_id=model.id,
             cluster_id=cluster.id,
-            worker_id=worker.id,
             engine=body.engine,
             profile=body.profile,
-            gpu_indexes=gpu_indexes,
-            state="scheduled",
-            desired_state="running",
-            generation=1,
-            port=port,
+            min_replicas=body.replicas,
+            max_replicas=body.replicas,
         )
-        instance.model = model
-        instance.worker = worker
-        instance.worker_name = worker.name
-        db.add(instance)
+        instances: list[ModelInstance] = []
+        for worker, gpu_indexes, port in allocations:
+            instance = ModelInstance(
+                model_id=model.id,
+                cluster_id=cluster.id,
+                worker_id=worker.id,
+                engine=body.engine,
+                profile=body.profile,
+                gpu_indexes=gpu_indexes,
+                state="scheduled",
+                desired_state="running",
+                generation=1,
+                port=port,
+                deployment=deployment,
+            )
+            instance.model = model
+            instance.worker = worker
+            instance.worker_name = worker.name
+            instances.append(instance)
+        db.add(deployment)
+        db.add_all(instances)
         await db.commit()
     except IntegrityError:
         await db.rollback()
         raise HTTPException(status_code=409, detail="allocation conflict; retry") from None
-    return instance
+    return _with_names(instances)
 @router.post("/{instance_id}/stop", response_model=InstanceOut)
 async def stop_instance(
     instance_id: uuid.UUID,
@@ -155,8 +173,18 @@ async def delete_instance(
     _: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> None:
-    instance = await db.get(ModelInstance, instance_id)
+    instance = (
+        await db.execute(
+            select(ModelInstance)
+            .options(selectinload(ModelInstance.deployment).selectinload(Deployment.instances))
+            .where(ModelInstance.id == instance_id)
+        )
+    ).scalar_one_or_none()
     if instance is None:
         raise HTTPException(status_code=404, detail="instance not found")
-    await db.delete(instance)
+    # Deleting the last replica removes the group too: a deployment always has >=1 instance.
+    if instance.deployment is not None and len(instance.deployment.instances) <= 1:
+        await db.delete(instance.deployment)
+    else:
+        await db.delete(instance)
     await db.commit()

@@ -19,7 +19,7 @@ from inferna_server.api import gateway as gateway_api
 from inferna_server.api.gateway import OpenAIError, flush_last_used_stamps
 from inferna_server.config import get_settings
 from inferna_server.main import app
-from inferna_server.models import ApiKey, Cluster, Model, ModelInstance, User, Worker
+from inferna_server.models import ApiKey, Cluster, Deployment, Model, ModelInstance, User, Worker
 from inferna_server.proto import cluster_pb2
 from inferna_server.services.workers_svc import sha256_hex
 from inferna_server.version import PROTOCOL_VERSION
@@ -74,11 +74,17 @@ async def _seed_instance(
     )
     db.add(worker)
     await db.flush()
+    deployment = Deployment(
+        model_id=model.id, cluster_id=cluster.id, engine="vllm", profile="latency"
+    )
+    db.add(deployment)
+    await db.flush()
     db.add(
         ModelInstance(
             model_id=model.id,
             cluster_id=cluster.id,
             worker_id=worker.id,
+            deployment=deployment,
             engine="vllm",
             profile="latency",
             gpu_indexes=[0],
@@ -622,10 +628,17 @@ async def test_oldest_instance_selected(client, gateway, db) -> None:
     # Instances with explicit created_at: w1 older
     now = datetime.now(timezone.utc)
     older = now - timedelta(days=1)
+    deployment = Deployment(
+        model_id=model.id, cluster_id=cluster.id, engine="vllm", profile="latency",
+        min_replicas=2, max_replicas=2,
+    )
+    db.add(deployment)
+    await db.flush()
     i1 = ModelInstance(
         model_id=model.id,
         cluster_id=cluster.id,
         worker_id=w1.id,
+        deployment=deployment,
         engine="vllm",
         profile="latency",
         gpu_indexes=[0],
@@ -637,6 +650,7 @@ async def test_oldest_instance_selected(client, gateway, db) -> None:
         model_id=model.id,
         cluster_id=cluster.id,
         worker_id=w2.id,
+        deployment=deployment,
         engine="vllm",
         profile="latency",
         gpu_indexes=[0],

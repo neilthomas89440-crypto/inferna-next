@@ -18,7 +18,8 @@ test("full mock deploy lifecycle", async ({ page }) => {
   // Deploy POST can take a while on a cold CI stack — wait for the navigation itself.
   await expect(page).toHaveURL(/\/instances$/, { timeout: 30000 });
   await expect(page.getByRole("heading", { name: "Instances" })).toBeVisible();
-  const row = page.locator("tbody tr", { hasText: "Qwen2.5 0.5B Instruct" });
+  const group = page.locator('tbody[data-testid^="deployment-group-"]', { hasText: "Qwen2.5 0.5B Instruct" });
+  const row = group.locator('tr[data-testid^="instance-row-"]');
   await expect(row).toHaveCount(1);
   await expect(row.getByText("running", { exact: true })).toBeVisible({ timeout: 90000 });
   await row.getByRole("button", { name: "Stop" }).click();

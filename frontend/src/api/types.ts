@@ -77,6 +77,7 @@ export interface Instance {
   updated_at: string;
   model: ModelInfo | null;
   worker_name: string | null;
+  deployment_id: string;
 }
 
 export interface Worker {
@@ -115,4 +116,18 @@ export interface DeployRequest {
   engine: Engine;
   profile: Profile;
   gpu_selection: "auto" | ManualGpuSelection;
+  replicas?: number;
+}
+
+export interface Deployment {
+  id: string;
+  model_id: string;
+  cluster_id: string;
+  engine: Engine;
+  profile: Profile;
+  min_replicas: number;
+  max_replicas: number;
+  created_at: string;
+  model: ModelInfo | null;
+  instances: Instance[];
 }

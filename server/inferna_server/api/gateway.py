@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import itertools
 import json
 import re
 import time
@@ -21,6 +22,7 @@ from python_multipart.multipart import MultipartParser, parse_options_header
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from starlette.background import BackgroundTask
 
 from inferna_server.config import get_settings
 from inferna_server.db import get_db
@@ -32,6 +34,7 @@ from inferna_server.models import (
     utcnow,
 )
 from inferna_server.services.metrics import (
+    inferna_instance_active_requests,
     inferna_requests,
     inferna_time_to_first_byte_seconds,
     inferna_tokens,
@@ -72,8 +75,16 @@ _gateway_bearer = HTTPBearer(
 
 # last_used_at stamps are collected in memory and persisted by a background
 # task in main.py, so the request-scoped session never COMMITs on the hot path.
+
 _last_used_dirty: dict[uuid.UUID, datetime] = {}
 _last_used_lock = asyncio.Lock()
+
+# Least-loaded routing state, in-memory like _last_used_dirty (single-node
+# server per PRODUCT_SPEC; a second node would need shared storage).
+_active_by_instance: dict[uuid.UUID, int] = {}
+_last_assigned: dict[uuid.UUID, int] = {}
+_assign_seq = itertools.count(1)
+_active_lock = asyncio.Lock()
 
 
 class OpenAIError(Exception):
@@ -347,8 +358,13 @@ async def _resolve_target(
         raise OpenAIError(
             404, f"model '{model_name}' not found", "invalid_request_error", "model_not_found"
         )
-    # Deterministic: oldest live instance when several exist (no load balancing in Phase 1).
-    instance = (
+    # Least-loaded: pick the live instance with the fewest active requests;
+    # ties broken by least-recently-assigned (LRU), so a fresh replica (no
+    # entry -> key 0) warms up first without synthetic traffic. Selection and
+    # the LRU stamp below share one _active_lock critical section: two
+    # concurrent requests must never observe the same (0, 0) snapshot and
+    # both land on the same idle replica. No awaits inside the lock.
+    rows = (
         (
             await db.execute(
                 select(ModelInstance)
@@ -362,8 +378,19 @@ async def _resolve_target(
             )
         )
         .scalars()
-        .first()
+        .all()
     )
+    async with _active_lock:
+        instance = (
+            min(
+                rows,
+                key=lambda i: (_active_by_instance.get(i.id, 0), _last_assigned.get(i.id, 0)),
+            )
+            if rows
+            else None
+        )
+        if instance is not None:
+            _last_assigned[instance.id] = next(_assign_seq)
     if instance is None or instance.worker is None:
         raise OpenAIError(
             404,
@@ -482,6 +509,16 @@ async def _relay(resp: httpx.Response, model_name: str, path: str) -> AsyncItera
         await resp.aclose()
 
 
+async def _release_instance(instance_id: uuid.UUID, model_name: str) -> None:
+    async with _active_lock:
+        n = _active_by_instance.get(instance_id, 1) - 1
+        if n <= 0:
+            _active_by_instance.pop(instance_id, None)
+        else:
+            _active_by_instance[instance_id] = n
+    inferna_instance_active_requests.labels(str(instance_id), model_name).set(max(n, 0))
+
+
 async def _proxy(
     request: Request, raw_body: bytes, model_name: str, db: AsyncSession
 ) -> StreamingResponse:
@@ -501,49 +538,68 @@ async def _proxy(
     client = get_gateway_client(request.app)
     settings = get_settings()
     target, instance, model = await _resolve_target(db, model_name, request)
-    # Preserve the original hostname in the Host header for virtual hosting, even
-    # though the connection target is now a pinned IP (prevents vhost mismatch).
-    worker = instance.worker
-    assert worker is not None  # guaranteed by _resolve_target
-    raw_host = worker.address or worker.hostname
-    host_header = _extract_host(raw_host)
-    if ":" in host_header and not host_header.startswith("["):
-        host_header = f"[{host_header}]"  # bracket IPv6 literals for Host
-    forwarded_headers["host"] = f"{host_header}:{instance.port}"
-    started: float | None = None
+    async with _active_lock:
+        n = _active_by_instance.get(instance.id, 0) + 1
+        _active_by_instance[instance.id] = n
+        inferna_instance_active_requests.labels(str(instance.id), model_name).set(n)
+    # From here on the routing slot must be released exactly once on every path.
+    # The success path hands ownership to the StreamingResponse BackgroundTask;
+    # the outer finally covers everything else — build/send failures,
+    # non-transport errors and asyncio.CancelledError on client disconnect —
+    # without swallowing them.
+    slot_handed_off = False
     try:
-        req = client.build_request(
-            request.method,
-            target,
-            content=raw_body or None,
-            headers=forwarded_headers,
-            # httpx 0.28 dropped send(timeout=); per-request timeouts go through build_request.
-            timeout=httpx.Timeout(
-                # Streams: no total deadline, but a generous per-read idle
-                # timeout so a stalled upstream cannot hang forever.
-                None if stream else settings.gateway_read_timeout,
-                connect=settings.gateway_connect_timeout,
-                read=STREAM_IDLE_TIMEOUT_SECONDS if stream else settings.gateway_read_timeout,
-            ),
-        )
-        started = time.monotonic()
-        resp = await client.send(req, stream=True)
-    except (httpx.TransportError, httpx.InvalidURL) as exc:
-        elapsed = time.monotonic() - started if started is not None else 0
-        inferna_time_to_first_byte_seconds.labels(model_name).observe(elapsed)
-        inferna_requests.labels(model=model_name, status="502").inc()
-        logger.warning(
-            "gateway upstream unreachable", model=model_name, target=target, error=str(exc)
-        )
-        raise OpenAIError(502, "upstream unreachable", "api_error", "upstream_error") from exc
+        # Preserve the original hostname in the Host header for virtual hosting,
+        # even though the connection target is now a pinned IP (prevents vhost mismatch).
+        worker = instance.worker
+        assert worker is not None  # guaranteed by _resolve_target
+        raw_host = worker.address or worker.hostname
+        host_header = _extract_host(raw_host)
+        if ":" in host_header and not host_header.startswith("["):
+            host_header = f"[{host_header}]"  # bracket IPv6 literals for Host
+        forwarded_headers["host"] = f"{host_header}:{instance.port}"
+        started: float | None = None
+        try:
+            req = client.build_request(
+                request.method,
+                target,
+                content=raw_body or None,
+                headers=forwarded_headers,
+                # httpx 0.28 dropped send(timeout=); per-request timeouts go through build_request.
+                timeout=httpx.Timeout(
+                    # Streams: no total deadline, but a generous per-read idle
+                    # timeout so a stalled upstream cannot hang forever.
+                    None if stream else settings.gateway_read_timeout,
+                    connect=settings.gateway_connect_timeout,
+                    read=STREAM_IDLE_TIMEOUT_SECONDS if stream else settings.gateway_read_timeout,
+                ),
+            )
+            started = time.monotonic()
+            resp = await client.send(req, stream=True)
+        except (httpx.TransportError, httpx.InvalidURL) as exc:
+            elapsed = time.monotonic() - started if started is not None else 0
+            inferna_time_to_first_byte_seconds.labels(model_name).observe(elapsed)
+            inferna_requests.labels(model=model_name, status="502").inc()
+            logger.warning(
+                "gateway upstream unreachable", model=model_name, target=target, error=str(exc)
+            )
+            raise OpenAIError(502, "upstream unreachable", "api_error", "upstream_error") from exc
 
-    inferna_time_to_first_byte_seconds.labels(model_name).observe(time.monotonic() - started)  # type: ignore[arg-type]
-    inferna_requests.labels(model=model_name, status=str(resp.status_code)).inc()
-    return StreamingResponse(
-        _relay(resp, model_name, request.url.path),
-        status_code=resp.status_code,
-        media_type=resp.headers.get("content-type") or "application/json",
-    )
+        inferna_time_to_first_byte_seconds.labels(model_name).observe(time.monotonic() - started)  # type: ignore[arg-type]
+        inferna_requests.labels(model=model_name, status=str(resp.status_code)).inc()
+        response = StreamingResponse(
+            _relay(resp, model_name, request.url.path),
+            status_code=resp.status_code,
+            media_type=resp.headers.get("content-type") or "application/json",
+            # Releases the routing slot after the stream ends or the client
+            # disconnects mid-stream — more reliable than a finally in _relay.
+            background=BackgroundTask(_release_instance, instance.id, model_name),
+        )
+        slot_handed_off = True
+        return response
+    finally:
+        if not slot_handed_off:
+            await _release_instance(instance.id, model_name)
 _CHAT_RESPONSES: dict[int | str, dict[str, Any]] = {
     200: {
         "description": "Success (SSE stream when stream=true)",

@@ -19,6 +19,7 @@ export default function DeployDialog({ model, onClose }: DeployDialogProps) {
   const [mode, setMode] = useState<"auto" | "manual">("auto");
   const [workerId, setWorkerId] = useState("");
   const [gpuIndexes, setGpuIndexes] = useState<number[]>([]);
+  const [replicas, setReplicas] = useState(1);
   const [error, setError] = useState<string | null>(null);
 
   const workers = useWorkers(clusterId || undefined);
@@ -61,12 +62,17 @@ export default function DeployDialog({ model, onClose }: DeployDialogProps) {
       setError("Select at least one GPU");
       return;
     }
+    if (!Number.isInteger(replicas) || replicas < 1 || replicas > 8) {
+      setError("Replicas must be an integer between 1 and 8");
+      return;
+    }
     try {
       await deploy.mutateAsync({
         model_id: model.id,
         cluster_id: clusterId,
         engine: engine as Engine,
         profile,
+        replicas,
         gpu_selection:
           mode === "manual" ? { worker_id: workerId, gpu_indexes: gpuIndexes } : "auto",
       });
@@ -142,7 +148,21 @@ export default function DeployDialog({ model, onClose }: DeployDialogProps) {
             </div>
           </fieldset>
 
+          {mode !== "manual" && (
+            <label className="block text-sm">
+              <span className="font-medium text-slate-700">Replicas</span>
+              <input
+                type="number"
+                min={1}
+                max={8}
+                value={replicas}
+                onChange={(e) => setReplicas(Number(e.target.value))}
+                className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+              />
+            </label>
+          )}
           <fieldset>
+
             <legend className="text-sm font-medium text-slate-700">GPU selection</legend>
             <div className="mt-1 flex gap-4">
               <label className="flex items-center gap-2 text-sm">
@@ -160,7 +180,10 @@ export default function DeployDialog({ model, onClose }: DeployDialogProps) {
                   type="radio"
                   name="gpu-mode"
                   checked={mode === "manual"}
-                  onChange={() => setMode("manual")}
+                  onChange={() => {
+                    setMode("manual");
+                    setReplicas(1);
+                  }}
                   className="accent-indigo-600"
                 />
                 Manual

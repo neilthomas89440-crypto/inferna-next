@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import DeployDialog from "../components/DeployDialog";
-import type { ModelInfo } from "../api/types";
+import type { ModelInfo, Worker } from "../api/types";
 
 const MODEL: ModelInfo = {
   id: "m1",
@@ -25,6 +25,33 @@ const CLUSTER = {
   created_at: "2026-01-01T00:00:00Z",
 };
 
+const WORKER: Worker = {
+  id: "w1",
+  cluster_id: "c1",
+  name: "node-1",
+  hostname: "node-1",
+  state: "connected",
+  version: null,
+  os: null,
+  cpu_cores: null,
+  memory_mb: null,
+  last_seen_at: null,
+  instances: [],
+  gpus: [
+    {
+      id: 0,
+      index: 0,
+      vendor: "nvidia",
+      name: "RTX 4090",
+      vram_mb: 8192,
+      used_vram_mb: 0,
+      utilization_pct: 0,
+      uuid: null,
+      driver_version: null,
+    },
+  ],
+};
+
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -32,8 +59,7 @@ function jsonResponse(body: unknown, status = 200) {
   });
 }
 
-// Route-aware fetch stub: clusters GET -> [CLUSTER]; deploy POST -> instance;
-function apiStub(overrides?: { deployError?: { detail: string } | null }) {
+function apiStub(overrides?: { deployError?: { detail: string } | null; workers?: Worker[] }) {
   return vi.fn((url: RequestInfo | URL, init?: RequestInit) => {
     const method = init?.method ?? "GET";
     const path = String(url);
@@ -51,7 +77,7 @@ function apiStub(overrides?: { deployError?: { detail: string } | null }) {
       return Promise.resolve(jsonResponse([CLUSTER]));
     }
     if (path.includes("/workers")) {
-      return Promise.resolve(jsonResponse([]));
+      return Promise.resolve(jsonResponse(overrides?.workers ?? []));
     }
     return Promise.resolve(jsonResponse([]));
   });
@@ -109,6 +135,7 @@ test("submits a deploy request and closes the dialog", async () => {
     engine: "vllm",
     profile: "latency",
     gpu_selection: "auto",
+    replicas: 1,
   });
 });
 
@@ -125,4 +152,66 @@ test("shows server error detail inline when deploy fails", async () => {
   await waitFor(() =>
     expect(screen.getByText("no GPU with enough free VRAM in cluster")).toBeInTheDocument(),
   );
+});
+
+test.each(["0", "9", "1.5"])("blocks submit when replicas is invalid (%s)", async (replicas) => {
+  const fetchMock = apiStub();
+  vi.stubGlobal("fetch", fetchMock);
+  renderDialog(() => {});
+  await waitFor(() => expect(screen.getByLabelText("Cluster")).toHaveValue("c1"));
+
+  fireEvent.change(screen.getByLabelText("Replicas"), { target: { value: replicas } });
+  fireEvent.submit(document.querySelector("form")!);
+
+  expect(screen.getByText("Replicas must be an integer between 1 and 8")).toBeInTheDocument();
+  const deployCall = fetchMock.mock.calls.find(([url, init]) =>
+    String(url).includes("/model-instances") && (init as RequestInit | undefined)?.method === "POST",
+  );
+  expect(deployCall).toBeUndefined();
+});
+
+test("submits non-default replicas count", async () => {
+  const fetchMock = apiStub();
+  vi.stubGlobal("fetch", fetchMock);
+  const onClose = vi.fn();
+
+  renderDialog(onClose);
+  await waitFor(() => expect(screen.getByLabelText("Cluster")).toHaveValue("c1"));
+
+  fireEvent.change(screen.getByLabelText("Replicas"), { target: { value: "3" } });
+  fireEvent.submit(document.querySelector("form")!);
+
+  await waitFor(() => expect(onClose).toHaveBeenCalled());
+  const deployCall = fetchMock.mock.calls.find(([url, init]) =>
+    String(url).includes("/model-instances") && (init as RequestInit | undefined)?.method === "POST",
+  );
+  expect(deployCall).toBeDefined();
+  const [, init] = deployCall as [RequestInfo | URL, RequestInit];
+  expect(JSON.parse(init.body as string)).toMatchObject({ replicas: 3 });
+});
+
+test("hides replicas field and submits default 1 in manual placement", async () => {
+  const fetchMock = apiStub({ workers: [WORKER] });
+  vi.stubGlobal("fetch", fetchMock);
+  const onClose = vi.fn();
+
+  renderDialog(onClose);
+  await waitFor(() => expect(screen.getByLabelText("Cluster")).toHaveValue("c1"));
+
+  fireEvent.click(screen.getByRole("radio", { name: /Manual/ }));
+  expect(screen.queryByLabelText("Replicas")).toBeNull();
+  await waitFor(() => expect(screen.getByText(/GPU 0/)).toBeInTheDocument());
+  fireEvent.click(screen.getByRole("checkbox"));
+  fireEvent.submit(document.querySelector("form")!);
+
+  await waitFor(() => expect(onClose).toHaveBeenCalled());
+  const deployCall = fetchMock.mock.calls.find(([url, init]) =>
+    String(url).includes("/model-instances") && (init as RequestInit | undefined)?.method === "POST",
+  );
+  expect(deployCall).toBeDefined();
+  const [, init] = deployCall as [RequestInfo | URL, RequestInit];
+  expect(JSON.parse(init.body as string)).toMatchObject({
+    replicas: 1,
+    gpu_selection: { worker_id: "w1", gpu_indexes: [0] },
+  });
 });
