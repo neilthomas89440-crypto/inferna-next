@@ -291,6 +291,31 @@ async def test_requires_auth(client) -> None:
     assert resp.status_code == 401
 
 
+@pytest.mark.parametrize("replicas", [0, 9])
+async def test_replica_bounds_rejected_by_pydantic(client, db, replicas: int) -> None:
+    """Guard the ge=1/le=8 schema bounds: if they regress, out-of-range replicas
+    reach ck_deployments_min_max and surface as a 500 instead of a 422."""
+    token = await _admin_token(client)
+    cluster = (await db.execute(select(Cluster).where(Cluster.name == "default"))).scalar_one()
+    body = _deploy_body(
+        await _model_id(db, "Qwen/Qwen2.5-0.5B-Instruct"),
+        str(cluster.id),
+        replicas=replicas,
+    )
+
+    resp = await client.post("/api/v1/model-instances", json=body, headers=auth_headers(token))
+    assert resp.status_code == 422
+
+    deployed = await _deploy(client, token, db, replicas=1)
+    dep_id = deployed[0]["deployment_id"]
+    scale = await client.post(
+        f"/api/v1/deployments/{dep_id}/scale",
+        json={"replicas": replicas},
+        headers=auth_headers(token),
+    )
+    assert scale.status_code == 422
+
+
 async def test_deployment_max_replicas_check_constraint(db) -> None:
 
     model_id = (
@@ -298,20 +323,31 @@ async def test_deployment_max_replicas_check_constraint(db) -> None:
     ).scalar_one()
     cluster_id = (await db.execute(select(Cluster.id).where(Cluster.name == "default"))).scalar_one()
 
-    def _deployment(max_replicas: int) -> Deployment:
+    def _deployment(min_replicas: int, max_replicas: int) -> Deployment:
         return Deployment(
             model_id=model_id,
             cluster_id=cluster_id,
             engine="vllm",
             profile="latency",
-            min_replicas=1,
+            min_replicas=min_replicas,
             max_replicas=max_replicas,
         )
 
-    db.add(_deployment(max_replicas=9))
+    # All three clauses of ck_deployments_min_max must reject invalid rows.
+    db.add(_deployment(min_replicas=0, max_replicas=9))
     with pytest.raises(IntegrityError):
         await db.commit()
     await db.rollback()
 
-    db.add(_deployment(max_replicas=8))
+    db.add(_deployment(min_replicas=2, max_replicas=1))
+    with pytest.raises(IntegrityError):
+        await db.commit()
+    await db.rollback()
+
+    db.add(_deployment(min_replicas=1, max_replicas=9))
+    with pytest.raises(IntegrityError):
+        await db.commit()
+    await db.rollback()
+
+    db.add(_deployment(min_replicas=1, max_replicas=8))
     await db.commit()

@@ -83,7 +83,10 @@ export default function DeployDialog({ model, onClose }: DeployDialogProps) {
     }
   };
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
+    <div
+      data-testid="deploy-dialog"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4"
+    >
       <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-lg bg-white p-6 shadow-xl">
         <h2 className="text-lg font-semibold text-slate-800">
           Deploy {model.display_name}
@@ -162,7 +165,6 @@ export default function DeployDialog({ model, onClose }: DeployDialogProps) {
             </label>
           )}
           <fieldset>
-
             <legend className="text-sm font-medium text-slate-700">GPU selection</legend>
             <div className="mt-1 flex gap-4">
               <label className="flex items-center gap-2 text-sm">

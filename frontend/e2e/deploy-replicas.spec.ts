@@ -37,7 +37,7 @@ test("deploy with 2 replicas creates a running group", async ({ page }) => {
 
   await page.getByRole("link", { name: "Models" }).click();
   await page.getByTestId("model-card-Qwen/Qwen2.5-0.5B-Instruct").getByRole("button", { name: "Deploy" }).click();
-  const dialog = page.locator("div.fixed.inset-0");
+  const dialog = page.getByTestId("deploy-dialog");
   await expect(page.getByRole("heading", { name: /Deploy .+/ })).toBeVisible();
 
   // The Replicas field is only offered in auto placement mode.

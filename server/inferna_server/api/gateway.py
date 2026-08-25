@@ -532,7 +532,9 @@ async def _release_instance(instance_id: uuid.UUID, model_name: str) -> None:
             _active_by_instance.pop(instance_id, None)
         else:
             _active_by_instance[instance_id] = n
-    inferna_instance_active_requests.labels(str(instance_id), model_name).set(max(n, 0))
+        # Under the same lock as the increment in _resolve_target so interleaved
+        # release/increment pairs cannot clobber the gauge with a stale value.
+        inferna_instance_active_requests.labels(str(instance_id), model_name).set(max(n, 0))
 
 
 async def _proxy(

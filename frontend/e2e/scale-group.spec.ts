@@ -38,7 +38,7 @@ test("scale deployment group up and down, then delete it", async ({ page }) => {
   // Seed a single-replica deployment first.
   await page.getByRole("link", { name: "Models" }).click();
   await page.getByTestId("model-card-Qwen/Qwen2.5-0.5B-Instruct").getByRole("button", { name: "Deploy" }).click();
-  const dialog = page.locator("div.fixed.inset-0");
+  const dialog = page.getByTestId("deploy-dialog");
   await expect(page.getByRole("heading", { name: /Deploy .+/ })).toBeVisible();
   await dialog.getByRole("button", { name: "Deploy", exact: true }).click();
   await expect(page).toHaveURL(/\/instances$/, { timeout: 30000 });
@@ -62,8 +62,8 @@ test("scale deployment group up and down, then delete it", async ({ page }) => {
 
   // Delete the group: confirm dialog clears every row and shows the empty state.
   await group.getByRole("button", { name: "Delete group" }).click();
-  await dialog.getByRole("button", { name: /delete/i }).click();
-  await expect(rows).toHaveCount(0);
+  await page.locator("div.fixed.inset-0").getByRole("button", { name: "Delete", exact: true }).click();
+  await expect(group).toHaveCount(0);
   await expect(
     page.getByText("No instances yet — deploy a model from the catalog."),
   ).toBeVisible();

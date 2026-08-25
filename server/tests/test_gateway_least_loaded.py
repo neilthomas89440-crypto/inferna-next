@@ -280,3 +280,46 @@ async def test_slot_reserved_before_dns_resolve_window(
             {"instance_id": str(instance.id), "model": "reserve-window-model"},
         )
         assert gauge == 0
+
+
+async def test_resolve_reject_releases_slot_and_replica_stays_routable(
+    client, gateway, db, seed_deployment, monkeypatch
+) -> None:
+    """The BaseException handler in _resolve_target must release the slot when
+    resolve_and_validate fails AFTER the reservation: the first request surfaces
+    as a gateway error (not a leaked slot), and the next request routes to the
+    same replica with a drained gauge.
+    """
+    key = await _admin_and_key(client)
+    seeded = await seed_deployment("reject-release-model", replicas=1)
+    (replica,) = seeded["instances"]
+
+    original_resolve = gateway_api.resolve_and_validate
+    calls = 0
+
+    async def flaky_resolve(host, settings):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            # Same error shape the SSRF rejection raises after reservation.
+            raise gateway_api.OpenAIError(
+                502, "upstream target not allowed", "api_error", "upstream_not_allowed"
+            )
+        return await original_resolve(host, settings)
+
+    monkeypatch.setattr(gateway_api, "resolve_and_validate", flaky_resolve)
+
+    first = await _chat(client, key, "reject-release-model")
+    assert first.status_code == 502
+
+    # Slot released: counter empty and gauge drained to 0.
+    assert gateway_api._active_by_instance.get(replica.id) is None
+    gauge = REGISTRY.get_sample_value(
+        "inferna_instance_active_requests",
+        {"instance_id": str(replica.id), "model": "reject-release-model"},
+    )
+    assert gauge == 0
+
+    second = await _chat(client, key, "reject-release-model")
+    assert second.status_code == 200
+    assert gateway["urls"] == [f"http://127.0.0.1:{replica.port}/v1/chat/completions"]

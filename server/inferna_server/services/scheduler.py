@@ -86,7 +86,7 @@ async def allocate_auto(
     if best is None:
         raise HTTPException(status_code=400, detail="no GPU with enough free VRAM in cluster")
     _, worker, gpu_index = best
-    port = _alloc_port(await _port_instances(db, worker.id), extra=set())
+    port = _alloc_port(await _port_instances(db, worker.id))
     return worker, [gpu_index], port
 
 
@@ -132,7 +132,7 @@ async def allocate_manual(
                 status_code=400, detail=f"GPU {index} does not fit {vram_required_mb} MB"
             )
 
-    port = _alloc_port(await _port_instances(db, worker.id), extra=set())
+    port = _alloc_port(await _port_instances(db, worker.id))
     return worker, sorted(set(gpu_indexes)), port
 
 

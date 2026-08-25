@@ -24,6 +24,7 @@ export default function InstancesPage() {
   const [endpoint, setEndpoint] = useState<Instance | null>(null);
   const [copiedTarget, setCopiedTarget] = useState<string | null>(null);
   const [copyError, setCopyError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const handleCopy = async (label: string, text: string) => {
     const result = await copyText(text);
@@ -48,6 +49,9 @@ export default function InstancesPage() {
   return (
     <div className="space-y-6">
       <h1 className="text-xl font-semibold text-slate-800">Instances</h1>
+      {actionError && (
+        <div className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{actionError}</div>
+      )}
       <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
         <table className="w-full text-left text-sm">
           <thead className="border-b border-slate-200 text-xs uppercase text-slate-500">
@@ -94,7 +98,14 @@ export default function InstancesPage() {
                         aria-label="Scale down"
                         disabled={dep.min_replicas <= 1 || scaleDeployment.isPending}
                         onClick={() =>
-                          scaleDeployment.mutate({ id: dep.id, replicas: dep.min_replicas - 1 })
+                          scaleDeployment.mutate(
+                            { id: dep.id, replicas: dep.min_replicas - 1 },
+                            {
+                              onMutate: () => setActionError(null),
+                              onError: (err) =>
+                                setActionError(err instanceof Error ? err.message : "Scale failed"),
+                            },
+                          )
                         }
                         className="h-6 w-6 rounded-md border border-slate-300 text-sm leading-none text-slate-600 hover:bg-slate-100 disabled:opacity-40"
                       >
@@ -105,7 +116,14 @@ export default function InstancesPage() {
                         aria-label="Scale up"
                         disabled={dep.min_replicas >= 8 || scaleDeployment.isPending}
                         onClick={() =>
-                          scaleDeployment.mutate({ id: dep.id, replicas: dep.min_replicas + 1 })
+                          scaleDeployment.mutate(
+                            { id: dep.id, replicas: dep.min_replicas + 1 },
+                            {
+                              onMutate: () => setActionError(null),
+                              onError: (err) =>
+                                setActionError(err instanceof Error ? err.message : "Scale failed"),
+                            },
+                          )
                         }
                         className="h-6 w-6 rounded-md border border-slate-300 text-sm leading-none text-slate-600 hover:bg-slate-100 disabled:opacity-40"
                       >
@@ -312,7 +330,11 @@ export default function InstancesPage() {
           confirmLabel="Delete"
           busy={deleteDeployment.isPending}
           onConfirm={() => {
-            deleteDeployment.mutate(deletingGroup, { onSettled: () => setDeletingGroup(null) });
+            deleteDeployment.mutate(deletingGroup, {
+              onSuccess: () => setDeletingGroup(null),
+              onError: (err) =>
+                setActionError(err instanceof Error ? err.message : "Delete failed"),
+            });
           }}
           onCancel={() => setDeletingGroup(null)}
         />

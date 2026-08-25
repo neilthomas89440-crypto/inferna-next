@@ -159,6 +159,7 @@ class ApiKey(Base, TimestampMixin):
 
     user: Mapped[User] = relationship()
 
+
 class Deployment(Base):
     __tablename__ = "deployments"
     __table_args__ = (

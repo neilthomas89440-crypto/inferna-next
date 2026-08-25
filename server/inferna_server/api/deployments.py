@@ -6,6 +6,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError, NoResultFound
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -52,12 +53,22 @@ async def scale_deployment(
     ).scalar_one_or_none()
     if deployment is None:
         raise HTTPException(status_code=404, detail="deployment not found")
-    await apply_scale(db, deployment, body.replicas, set_range=True)
+    try:
+        await apply_scale(db, deployment, body.replicas, set_range=True)
+    except IntegrityError:
+        await db.rollback()
+        # A concurrent delete can race the INSERT/UPDATE of apply_scale's commit
+        # (Postgres/SQLite); same parity as api/instances.py deploy.
+        raise HTTPException(status_code=409, detail="allocation conflict; retry") from None
     # Re-read after apply_scale's commit (expired attributes cannot be lazy-loaded in async).
-    rows = await db.execute(
-        select(Deployment).options(*_DEPLOYMENT_LOADS).where(Deployment.id == deployment_id)
-    )
-    refreshed = rows.scalar_one()
+    try:
+        rows = await db.execute(
+            select(Deployment).options(*_DEPLOYMENT_LOADS).where(Deployment.id == deployment_id)
+        )
+        refreshed = rows.scalar_one()
+    except NoResultFound:
+        # The group was deleted between apply_scale's commit and this re-read.
+        raise HTTPException(status_code=404, detail="deployment not found") from None
     _with_names(list(refreshed.instances))
     return refreshed
 
