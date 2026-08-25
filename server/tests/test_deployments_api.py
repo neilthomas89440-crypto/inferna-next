@@ -169,6 +169,73 @@ async def test_scale_in_prefers_non_running_replica(client, db) -> None:
     assert row.last_scaled_at is not None
 
 
+async def test_scale_replaces_errored_replicas_without_counting_them(client, db) -> None:
+    """Greptile P1: errored replicas hold a port/GPU slot but serve nothing, so
+    they must not count toward the target capacity.
+
+    3 replicas (1 running, 2 error), scale to 2: both broken records are
+    stopped in place (generation bump, error cleared, NOT deleted), the healthy
+    replica is untouched, and one fresh scheduled record is allocated so
+    desired-running returns to 2 — serving now: 1, after worker start: 2.
+    """
+    token = await _admin_token(client)
+    deployed = await _deploy(client, token, db, replicas=3)
+    dep_id = uuid.UUID(deployed[0]["deployment_id"])
+
+    instances = (
+        await db.execute(select(ModelInstance).where(ModelInstance.deployment_id == dep_id))
+    ).scalars().all()
+    assert len(instances) == 3
+    healthy = instances[0]
+    broken_one, broken_two = instances[1], instances[2]
+    # Deploy seeds replicas as scheduled; promote the healthy one so the group
+    # matches the reviewed scenario exactly: 1 running + 2 error.
+    healthy.state = "running"
+    for broken in (broken_one, broken_two):
+        broken.state = "error"
+        broken.error_detail = "oom"
+    await db.commit()
+
+    resp = await client.post(
+        f"/api/v1/deployments/{dep_id}/scale",
+        json={"replicas": 2},
+        headers=auth_headers(token),
+    )
+    by_id = {str(i["id"]): i for i in resp.json()["instances"]}
+
+    # Broken records stopped in place so the worker frees their port/GPU slot;
+    # observed state stays "error" until the worker reports the stop.
+    for broken in (broken_one, broken_two):
+        row = by_id[str(broken.id)]
+        assert row["desired_state"] == "stopped"
+        assert row["generation"] == 2
+        assert row["error_detail"] is None
+    # The healthy replica is untouched.
+    kept = by_id[str(healthy.id)]
+    assert kept["desired_state"] == "running" and kept["state"] == "running"
+    assert kept["generation"] == 1
+    # The endpoint committed in its own session; expire this session's cached
+    # copies of the original replicas or the re-read returns stale attributes.
+    db.expire_all()
+
+    rows = (
+        await db.execute(select(ModelInstance).where(ModelInstance.deployment_id == dep_id))
+    ).scalars().all()
+    original_ids = {healthy.id, broken_one.id, broken_two.id}
+    replacements = [r for r in rows if r.id not in original_ids]
+    assert len(rows) == 4 and len(replacements) == 1
+    repl = replacements[0]
+    # The replacement went through allocate_replicas: a fresh scheduled record.
+    assert repl.state == "scheduled" and repl.desired_state == "running"
+    assert repl.generation == 1 and repl.port is not None
+
+    desired_running = [r for r in rows if r.desired_state == "running"]
+    assert len(desired_running) == 2
+    serving_now = [r for r in desired_running if r.state == "running"]
+    pending = [r for r in desired_running if r.state != "running"]
+    assert len(serving_now) == 1 and len(pending) == 1
+
+
 async def test_delete_group_cascades_to_replicas(client, db) -> None:
     token = await _admin_token(client)
     deployed = await _deploy(client, token, db, replicas=2)

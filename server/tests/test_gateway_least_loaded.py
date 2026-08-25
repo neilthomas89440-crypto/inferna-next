@@ -222,3 +222,61 @@ async def test_requests_continue_after_one_replica_stopped(
     # Every request reached only the surviving (oldest) replica.
     survivor_url = f"http://127.0.0.1:{older.port}/v1/chat/completions"
     assert gateway["urls"] == [survivor_url] * 4
+
+
+async def test_slot_reserved_before_dns_resolve_window(
+    client, gateway, db, seed_deployment, monkeypatch
+) -> None:
+    """The routing slot is reserved inside the selection lock, before the DNS
+    resolve await. Two concurrent requests parked in the resolve window must
+    observe each other's reservations (each replica exactly one active slot)
+    and land on distinct replicas; afterwards both gauges drain to 0.
+    """
+    key = await _admin_and_key(client)
+    seeded = await seed_deployment("reserve-window-model", replicas=2)
+    older, newer = seeded["instances"]
+
+    original_resolve = gateway_api.resolve_and_validate
+    arrived = 0
+    both_selected = asyncio.Event()
+    release = asyncio.Event()
+
+    async def gated_resolve(host, settings):
+        nonlocal arrived
+        arrived += 1
+        if arrived == 2:
+            both_selected.set()
+        # Park both requests after their selection but before any upstream send.
+        await release.wait()
+        return await original_resolve(host, settings)
+
+    monkeypatch.setattr(gateway_api, "resolve_and_validate", gated_resolve)
+
+    tasks = [asyncio.create_task(_chat(client, key, "reserve-window-model")) for _ in range(2)]
+    try:
+        await asyncio.wait_for(both_selected.wait(), timeout=5)
+
+        # Deterministic regression point: with selection and reservation split by
+        # an await, these counters were still empty here and a third selection
+        # (or a burst) would read stale zeros and pile onto one replica.
+        assert sorted(gateway_api._active_by_instance.get(i.id, 0) for i in (older, newer)) == [
+            1,
+            1,
+        ]
+
+        release.set()
+        first, second = await asyncio.gather(*tasks)
+    finally:
+        release.set()
+
+    assert first.status_code == 200 and second.status_code == 200
+    assert len(gateway["urls"]) == 2
+    ports = {int(url.split(":", 3)[2].split("/", 1)[0]) for url in gateway["urls"]}
+    assert ports == {older.port, newer.port}
+    for instance in (older, newer):
+        assert gateway_api._active_by_instance.get(instance.id) is None
+        gauge = REGISTRY.get_sample_value(
+            "inferna_instance_active_requests",
+            {"instance_id": str(instance.id), "model": "reserve-window-model"},
+        )
+        assert gauge == 0

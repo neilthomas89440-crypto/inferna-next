@@ -6,7 +6,7 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from inferna_server.models import Deployment, ModelInstance, utcnow
+from inferna_server.models import LIVE_STATES, Deployment, ModelInstance, utcnow
 from inferna_server.services.scheduler import allocate_replicas
 
 logger = structlog.get_logger(__name__)
@@ -39,19 +39,40 @@ async def apply_scale(
         # (IntegrityError → 500). min/max themselves stay untouched — with
         # set_range=False only the live replica count moves.
         replicas = max(deployment.min_replicas, min(deployment.max_replicas, replicas))
+    # Classify desired-running replicas: only state=="running" serves traffic now;
+    # pending ones (scheduled/starting — everything non-terminal in LIVE_STATES)
+    # have not come up yet but are on track and count toward the target capacity.
+    # Terminally errored replicas hold a port/GPU slot while serving nothing, so
+    # they must not count as capacity.
     live = [inst for inst in deployment.instances if inst.desired_state == "running"]
-    action = "out" if replicas > len(live) else "in"
-    if replicas > len(live):
+    serving = [inst for inst in live if inst.state == "running"]
+    pending = [inst for inst in live if inst.state != "running" and inst.state in LIVE_STATES]
+    broken = [inst for inst in live if inst.state == "error"]
+    # Stop (not delete) the broken replicas exactly like a scale-in would: the
+    # generation bump tells the worker to tear down the container and free its
+    # port/GPU slot; the record stays for auditability. Replacing them via fresh
+    # allocate_replicas records yields a clean placement — auto-restarting the
+    # same record is Release B scope.
+    for inst in broken:
+        inst.desired_state = "stopped"
+        inst.generation += 1
+        inst.error_detail = None
+    effective_capacity = len(serving) + len(pending)
+    action = "out" if replicas > effective_capacity else "in"
+    if replicas > effective_capacity:
         # Anti-affinity against the GPU pairs already held by this group.
         used = {
-            (inst.worker_id, index) for inst in live for index in inst.gpu_indexes if inst.worker_id
+            (inst.worker_id, index)
+            for inst in (*serving, *pending)
+            for index in inst.gpu_indexes
+            if inst.worker_id
         }
         allocations = await allocate_replicas(
             db,
             deployment.cluster_id,
             deployment.model.vram_required_mb,
             deployment.engine,
-            replicas - len(live),
+            replicas - effective_capacity,
             used,
         )
         for worker, gpu_indexes, port in allocations:
@@ -69,11 +90,13 @@ async def apply_scale(
                     port=port,
                 )
             )
-    elif replicas < len(live):
-        # Stop non-running replicas first (error/starting/scheduled), then oldest running —
-        # exactly like POST /{id}/stop so the worker receives the stop command via generation.
-        to_stop = sorted(live, key=lambda inst: (inst.state == "running", inst.created_at))[
-            : len(live) - replicas
+    elif replicas < effective_capacity:
+        # Stop non-running replicas first (starting/scheduled), then oldest running —
+        # exactly like POST /{id}/stop so the worker receives the stop command via
+        # generation. Broken replicas are already stopped above and hold no capacity.
+        candidates = serving + pending
+        to_stop = sorted(candidates, key=lambda inst: (inst.state == "running", inst.created_at))[
+            : effective_capacity - replicas
         ]
         for inst in to_stop:
             inst.desired_state = "stopped"
@@ -87,9 +110,10 @@ async def apply_scale(
         "deployment scaled",
         deployment_id=str(deployment.id),
         model=deployment.model.name,
-        from_count=len(live),
+        from_capacity=effective_capacity,
         to_count=replicas,
         action=action,
+        broken_stopped=len(broken),
         set_range=set_range,
     )
     await db.commit()
