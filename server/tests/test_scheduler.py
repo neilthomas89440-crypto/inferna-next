@@ -7,7 +7,7 @@ from conftest import add_connected_worker
 from fastapi import HTTPException
 from sqlalchemy import select
 
-from inferna_server.models import Cluster, Model, ModelInstance
+from inferna_server.models import Cluster, Deployment, Model, ModelInstance
 from inferna_server.services.scheduler import allocate_auto, allocate_manual
 
 
@@ -20,12 +20,22 @@ async def _model(db, name: str) -> Model:
 
 
 async def _deploy(db, worker_id, model_id, gpu_indexes, port) -> ModelInstance:
+    cluster = (
+        await db.execute(select(Cluster).where(Cluster.name == "default"))
+    ).scalar_one()
+    deployment = Deployment(
+        model_id=model_id,
+        cluster_id=cluster.id,
+        engine="vllm",
+        profile="latency",
+    )
+    db.add(deployment)
+    await db.flush()
     instance = ModelInstance(
         model_id=model_id,
-        cluster_id=(await db.execute(select(Cluster).where(Cluster.name == "default")))
-        .scalar_one()
-        .id,
+        cluster_id=cluster.id,
         worker_id=worker_id,
+        deployment=deployment,
         engine="vllm",
         profile="latency",
         gpu_indexes=gpu_indexes,
@@ -167,10 +177,14 @@ async def test_port_unique_constraint(db) -> None:
     worker = await add_connected_worker(db, cluster.id, name="uniq")
     model = await _model(db, "Qwen/Qwen2.5-0.5B-Instruct")
     # Two instances with same worker_id+port should violate partial unique index
+    deployment = Deployment(
+        model_id=model.id, cluster_id=cluster.id, engine="vllm", profile="latency"
+    )
     inst1 = ModelInstance(
         model_id=model.id,
         cluster_id=cluster.id,
         worker_id=worker.id,
+        deployment=deployment,
         engine="vllm",
         profile="latency",
         gpu_indexes=[0],
@@ -179,10 +193,13 @@ async def test_port_unique_constraint(db) -> None:
         generation=1,
         port=8010,
     )
+    db.add_all([deployment, inst1])
+    await db.commit()
     inst2 = ModelInstance(
         model_id=model.id,
         cluster_id=cluster.id,
         worker_id=worker.id,
+        deployment=deployment,
         engine="vllm",
         profile="latency",
         gpu_indexes=[0],
@@ -191,8 +208,6 @@ async def test_port_unique_constraint(db) -> None:
         generation=1,
         port=8010,
     )
-    db.add(inst1)
-    await db.commit()
     db.add(inst2)
     with pytest.raises(IntegrityError):
         await db.commit()
@@ -201,7 +216,7 @@ async def test_port_unique_constraint(db) -> None:
 
 async def test_sequential_deploy_different_ports(client, db) -> None:
     # Use API level to check sequential deploys get different ports
-    from tests.conftest import TEST_ADMIN, auth_headers, login
+    from conftest import TEST_ADMIN, auth_headers, login
 
     # Ensure worker exists
     cluster = await _default_cluster(db)
@@ -220,4 +235,4 @@ async def test_sequential_deploy_different_ports(client, db) -> None:
     assert resp1.status_code == 201
     resp2 = await client.post("/api/v1/model-instances", json=body, headers=headers)
     assert resp2.status_code == 201
-    assert resp1.json()["port"] != resp2.json()["port"]
+    assert resp1.json()[0]["port"] != resp2.json()[0]["port"]

@@ -40,6 +40,14 @@ inferna_tokens = PrometheusCounter(
     "inferna_tokens", "Tokens served by kind", ["model", "kind"]  # kind: prompt | completion
 )  # exposed as `inferna_tokens_total`
 
+# Gateway-maintained live counter (set under the gateway's _active_lock on
+# every request acquire/release). Deliberately NOT in _ALL_GAUGES:
+inferna_instance_active_requests = Gauge(
+    "inferna_instance_active_requests",
+    "Active gateway requests per instance",
+    ["instance_id", "model"],
+)
+
 _ALL_GAUGES = (
     inferna_workers_online,
     inferna_gpus_total,

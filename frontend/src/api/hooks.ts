@@ -5,6 +5,7 @@ import type {
   ApiKeyWithSecret,
   Cluster,
   Dashboard,
+  Deployment,
   DeployRequest,
   Instance,
   ModelInfo,
@@ -103,15 +104,24 @@ export function useInstances() {
   });
 }
 
+export function useDeployments() {
+  return useQuery({
+    queryKey: ["deployments"],
+    queryFn: () => api<Deployment[]>("/deployments"),
+    refetchInterval: LIVE_INTERVAL,
+  });
+}
+
 export function useDeployInstance() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (body: DeployRequest) =>
-      api<Instance>("/model-instances", { method: "POST", body: JSON.stringify(body) }),
+      api<Instance[]>("/model-instances", { method: "POST", body: JSON.stringify(body) }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["instances"] });
       queryClient.invalidateQueries({ queryKey: ["dashboard"] });
       queryClient.invalidateQueries({ queryKey: ["workers"] });
+      queryClient.invalidateQueries({ queryKey: ["deployments"] });
     },
   });
 }
@@ -123,6 +133,7 @@ export function useStopInstance() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["instances"] });
       queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      queryClient.invalidateQueries({ queryKey: ["deployments"] });
     },
   });
 }
@@ -133,6 +144,7 @@ export function useRestartInstance() {
     mutationFn: (id: string) => api<Instance>(`/model-instances/${id}/restart`, { method: "POST" }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["instances"] });
+      queryClient.invalidateQueries({ queryKey: ["deployments"] });
       queryClient.invalidateQueries({ queryKey: ["dashboard"] });
     },
   });
@@ -153,6 +165,37 @@ export function useDeleteInstance() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["instances"] });
       queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      queryClient.invalidateQueries({ queryKey: ["deployments"] });
+    },
+  });
+}
+
+export function useScaleDeployment() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, replicas }: { id: string; replicas: number }) =>
+      api<Deployment>(`/deployments/${id}/scale`, {
+        method: "POST",
+        body: JSON.stringify({ replicas }),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["deployments"] });
+      queryClient.invalidateQueries({ queryKey: ["instances"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      queryClient.invalidateQueries({ queryKey: ["workers"] });
+    },
+  });
+}
+
+export function useDeleteDeployment() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api<void>(`/deployments/${id}`, { method: "DELETE" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["deployments"] });
+      queryClient.invalidateQueries({ queryKey: ["instances"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      queryClient.invalidateQueries({ queryKey: ["workers"] });
     },
   });
 }

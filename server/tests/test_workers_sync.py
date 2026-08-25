@@ -8,7 +8,7 @@ import grpc
 import pytest
 from sqlalchemy import select
 
-from inferna_server.models import Cluster, Model, ModelInstance, Worker
+from inferna_server.models import Cluster, Deployment, Model, ModelInstance, Worker
 from inferna_server.proto import cluster_pb2
 from inferna_server.services.workers_svc import mark_disconnected, register_worker, sync_worker
 
@@ -74,10 +74,16 @@ async def _deploy_scheduled(db, worker_id: str, port: int = 8010) -> str:
     model = (
         await db.execute(select(Model).where(Model.name == "Qwen/Qwen2.5-7B-Instruct"))
     ).scalar_one()
+    deployment = Deployment(
+        model_id=model.id, cluster_id=cluster.id, engine="vllm", profile="latency"
+    )
+    db.add(deployment)
+    await db.flush()
     instance = ModelInstance(
         model_id=model.id,
         cluster_id=cluster.id,
         worker_id=uuid.UUID(worker_id),
+        deployment=deployment,
         engine="vllm",
         profile="latency",
         gpu_indexes=[0],

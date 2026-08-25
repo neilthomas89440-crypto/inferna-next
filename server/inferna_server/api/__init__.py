@@ -17,6 +17,9 @@ from inferna_server.api import (
     dashboard as dashboard_api,
 )
 from inferna_server.api import (
+    deployments as deployments_api,
+)
+from inferna_server.api import (
     instances as instances_api,
 )
 from inferna_server.api import (
@@ -40,5 +43,6 @@ api_router.include_router(clusters_api.router)
 api_router.include_router(workers_api.router)
 api_router.include_router(models_api.router)
 api_router.include_router(instances_api.router)
+api_router.include_router(deployments_api.router)
 api_router.include_router(dashboard_api.router)
 api_router.include_router(compatibility_api.router)

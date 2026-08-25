@@ -1,8 +1,10 @@
 import { useState } from "react";
 import {
+  useDeleteDeployment,
   useDeleteInstance,
-  useInstances,
+  useDeployments,
   useRestartInstance,
+  useScaleDeployment,
   useStopInstance,
 } from "../api/hooks";
 import type { Instance } from "../api/types";
@@ -11,14 +13,18 @@ import StateBadge from "../components/StateBadge";
 import { copyText } from "../lib/clipboard";
 
 export default function InstancesPage() {
-  const instances = useInstances();
+  const deployments = useDeployments();
   const stopInstance = useStopInstance();
   const restartInstance = useRestartInstance();
   const deleteInstance = useDeleteInstance();
+  const scaleDeployment = useScaleDeployment();
+  const deleteDeployment = useDeleteDeployment();
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [deletingGroup, setDeletingGroup] = useState<string | null>(null);
   const [endpoint, setEndpoint] = useState<Instance | null>(null);
   const [copiedTarget, setCopiedTarget] = useState<string | null>(null);
   const [copyError, setCopyError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const handleCopy = async (label: string, text: string) => {
     const result = await copyText(text);
@@ -31,11 +37,11 @@ export default function InstancesPage() {
     }
   };
 
-  if (instances.isLoading) return <p className="text-slate-400">Loading instances…</p>;
-  if (instances.isError || !instances.data) {
+  if (deployments.isLoading) return <p className="text-slate-400">Loading deployments…</p>;
+  if (deployments.isError || !deployments.data) {
     return (
       <p className="text-red-600">
-        Failed to load instances: {String(instances.error ?? "unknown error")}
+        Failed to load deployments: {String(deployments.error ?? "unknown error")}
       </p>
     );
   }
@@ -43,6 +49,9 @@ export default function InstancesPage() {
   return (
     <div className="space-y-6">
       <h1 className="text-xl font-semibold text-slate-800">Instances</h1>
+      {actionError && (
+        <div className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{actionError}</div>
+      )}
       <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
         <table className="w-full text-left text-sm">
           <thead className="border-b border-slate-200 text-xs uppercase text-slate-500">
@@ -58,106 +67,176 @@ export default function InstancesPage() {
               <th className="px-4 py-2 text-right">Actions</th>
             </tr>
           </thead>
-          <tbody>
-            {instances.data.length === 0 && (
+          {!deployments.data.length && (
+            <tbody>
               <tr>
                 <td colSpan={9} className="px-4 py-6 text-center text-slate-400">
                   No instances yet — deploy a model from the catalog.
                 </td>
               </tr>
-            )}
-            {instances.data.map((inst) => (
-              <tr key={inst.id} className="border-b border-slate-100 last:border-0">
-                <td className="px-4 py-2 font-medium text-slate-700">
-                  {inst.model?.display_name ?? inst.model_id}
-                </td>
-                <td className="px-4 py-2 text-slate-600">{inst.engine}</td>
-                <td className="px-4 py-2 text-slate-600">{inst.profile}</td>
-                <td className="px-4 py-2 text-slate-600">{inst.worker_name ?? "—"}</td>
-                <td className="px-4 py-2 font-mono text-slate-600">
-                  {inst.gpu_indexes.join(", ") || "—"}
-                </td>
-                <td className="px-4 py-2 font-mono text-slate-600">{inst.port ?? "—"}</td>
-                <td className="px-4 py-2">
-                  <StateBadge state={inst.state} />
-                  {inst.error_detail && (
-                    <span
-                      className="ml-1 cursor-help text-xs text-red-500"
-                      title={inst.error_detail}
-                    >
-                      ⚠
-                    </span>
-                  )}
-                </td>
-                <td className="px-4 py-2">
-                  {inst.state === "running" ? (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setCopiedTarget(null);
-                        setCopyError(null);
-                        setEndpoint(inst);
-                      }}
-                      className="text-sm text-indigo-600 hover:underline"
-                    >
-                      Endpoint
-                    </button>
-                  ) : (
-                    <span className="text-slate-400">—</span>
-                  )}
-                </td>
-                <td className="px-4 py-2 text-right">
-                  {inst.desired_state !== "stopped" && inst.state !== "stopped" && (
-                    <button
-                      type="button"
-                      disabled={stopInstance.isPending}
-                      onClick={() => stopInstance.mutate(inst.id)}
-                      className="mr-3 text-sm text-slate-600 hover:underline disabled:opacity-50"
-                    >
-                      Stop
-                    </button>
-                  )}
-                  {inst.state === "error" && (
-                    <button
-                      type="button"
-                      disabled={restartInstance.isPending}
-                      onClick={() => restartInstance.mutate(inst.id)}
-                      className="mr-3 text-sm text-slate-600 hover:underline disabled:opacity-50"
-                    >
-                      Retry
-                    </button>
-                  )}
-                  {inst.state === "stopped" && (
-                    <button
-                      type="button"
-                      disabled={restartInstance.isPending}
-                      onClick={() => restartInstance.mutate(inst.id)}
-                      className="mr-3 text-sm text-slate-600 hover:underline disabled:opacity-50"
-                    >
-                      Resume
-                    </button>
-                  )}
-                  {(inst.state === "running" || inst.state === "starting") && (
-                    <button
-                      type="button"
-                      disabled={restartInstance.isPending}
-                      onClick={() => restartInstance.mutate(inst.id)}
-                      className="mr-3 text-sm text-slate-600 hover:underline disabled:opacity-50"
-                    >
-                      Restart
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => setDeleting(inst.id)}
-                    className="text-sm text-red-600 hover:underline"
+            </tbody>
+          )}
+          {deployments.data.map((dep) => {
+            const ready = dep.instances.filter(
+              (i) => i.desired_state === "running" && i.state === "running",
+            ).length;
+            return (
+              <tbody key={dep.id} data-testid={`deployment-group-${dep.id}`}>
+                <tr className="border-b border-slate-100 bg-slate-50">
+                  <td className="px-4 py-2 font-medium text-slate-700">
+                    {dep.model?.display_name ?? dep.model_id}
+                  </td>
+                  <td className="px-4 py-2 text-slate-600">{dep.engine}</td>
+                  <td className="px-4 py-2 text-slate-600">{dep.profile}</td>
+                  <td colSpan={6} className="px-4 py-2">
+                    <div className="flex items-center justify-end gap-3">
+                      <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700">
+                        {ready}/{dep.min_replicas} running
+                      </span>
+                      <button
+                        type="button"
+                        aria-label="Scale down"
+                        disabled={dep.min_replicas <= 1 || scaleDeployment.isPending}
+                        onClick={() =>
+                          scaleDeployment.mutate(
+                            { id: dep.id, replicas: dep.min_replicas - 1 },
+                            {
+                              onMutate: () => setActionError(null),
+                              onError: (err) =>
+                                setActionError(err instanceof Error ? err.message : "Scale failed"),
+                            },
+                          )
+                        }
+                        className="h-6 w-6 rounded-md border border-slate-300 text-sm leading-none text-slate-600 hover:bg-slate-100 disabled:opacity-40"
+                      >
+                        −
+                      </button>
+                      <button
+                        type="button"
+                        aria-label="Scale up"
+                        disabled={dep.min_replicas >= 8 || scaleDeployment.isPending}
+                        onClick={() =>
+                          scaleDeployment.mutate(
+                            { id: dep.id, replicas: dep.min_replicas + 1 },
+                            {
+                              onMutate: () => setActionError(null),
+                              onError: (err) =>
+                                setActionError(err instanceof Error ? err.message : "Scale failed"),
+                            },
+                          )
+                        }
+                        className="h-6 w-6 rounded-md border border-slate-300 text-sm leading-none text-slate-600 hover:bg-slate-100 disabled:opacity-40"
+                      >
+                        +
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setDeletingGroup(dep.id)}
+                        className="text-sm text-red-600 hover:underline"
+                      >
+                        Delete group
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+                {dep.instances.map((inst) => (
+                  <tr
+                    key={inst.id}
+                    data-testid={`instance-row-${inst.id}`}
+                    className="border-b border-slate-100 last:border-0"
                   >
-                    Delete
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
+                    <td className="px-4 py-2 font-medium text-slate-700">
+                      {inst.model?.display_name ?? inst.model_id}
+                    </td>
+                    <td className="px-4 py-2 text-slate-600">{inst.engine}</td>
+                    <td className="px-4 py-2 text-slate-600">{inst.profile}</td>
+                    <td className="px-4 py-2 text-slate-600">{inst.worker_name ?? "—"}</td>
+                    <td className="px-4 py-2 font-mono text-slate-600">
+                      {inst.gpu_indexes.join(", ") || "—"}
+                    </td>
+                    <td className="px-4 py-2 font-mono text-slate-600">{inst.port ?? "—"}</td>
+                    <td className="px-4 py-2">
+                      <StateBadge state={inst.state} />
+                      {inst.error_detail && (
+                        <span
+                          className="ml-1 cursor-help text-xs text-red-500"
+                          title={inst.error_detail}
+                        >
+                          ⚠
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-4 py-2">
+                      {inst.state === "running" ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCopiedTarget(null);
+                            setCopyError(null);
+                            setEndpoint(inst);
+                          }}
+                          className="text-sm text-indigo-600 hover:underline"
+                        >
+                          Endpoint
+                        </button>
+                      ) : (
+                        <span className="text-slate-400">—</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-2 text-right">
+                      {inst.desired_state !== "stopped" && inst.state !== "stopped" && (
+                        <button
+                          type="button"
+                          disabled={stopInstance.isPending}
+                          onClick={() => stopInstance.mutate(inst.id)}
+                          className="mr-3 text-sm text-slate-600 hover:underline disabled:opacity-50"
+                        >
+                          Stop
+                        </button>
+                      )}
+                      {inst.state === "error" && (
+                        <button
+                          type="button"
+                          disabled={restartInstance.isPending}
+                          onClick={() => restartInstance.mutate(inst.id)}
+                          className="mr-3 text-sm text-slate-600 hover:underline disabled:opacity-50"
+                        >
+                          Retry
+                        </button>
+                      )}
+                      {inst.state === "stopped" && (
+                        <button
+                          type="button"
+                          disabled={restartInstance.isPending}
+                          onClick={() => restartInstance.mutate(inst.id)}
+                          className="mr-3 text-sm text-slate-600 hover:underline disabled:opacity-50"
+                        >
+                          Resume
+                        </button>
+                      )}
+                      {(inst.state === "running" || inst.state === "starting") && (
+                        <button
+                          type="button"
+                          disabled={restartInstance.isPending}
+                          onClick={() => restartInstance.mutate(inst.id)}
+                          className="mr-3 text-sm text-slate-600 hover:underline disabled:opacity-50"
+                        >
+                          Restart
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => setDeleting(inst.id)}
+                        className="text-sm text-red-600 hover:underline"
+                      >
+                        Delete
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            );
+          })}
         </table>
       </div>
 
@@ -211,7 +290,7 @@ export default function InstancesPage() {
                   </div>
                   <div>
                     <p className="text-sm font-medium text-slate-700">cURL snippet</p>
-                    <pre className="mt-1 overflow-x-auto rounded-md border border-slate-300 bg-slate-900 px-3 py-2 text-xs text-slate-100">
+                    <pre className="mt-1 overflow-x-auto rounded-md border border-slate-900 bg-slate-900 px-3 py-2 text-xs text-slate-100">
                       {curlSnippet}
                     </pre>
                     <button
@@ -241,6 +320,23 @@ export default function InstancesPage() {
             deleteInstance.mutate(deleting, { onSettled: () => setDeleting(null) });
           }}
           onCancel={() => setDeleting(null)}
+        />
+      )}
+
+      {deletingGroup && (
+        <ConfirmDialog
+          title="Delete deployment group"
+          message="All replicas in this group will be removed. This cannot be undone."
+          confirmLabel="Delete"
+          busy={deleteDeployment.isPending}
+          onConfirm={() => {
+            deleteDeployment.mutate(deletingGroup, {
+              onSuccess: () => setDeletingGroup(null),
+              onError: (err) =>
+                setActionError(err instanceof Error ? err.message : "Delete failed"),
+            });
+          }}
+          onCancel={() => setDeletingGroup(null)}
         />
       )}
     </div>

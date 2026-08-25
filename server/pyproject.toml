@@ -51,4 +51,6 @@ ignore = ["B008", "UP017"]
 
 [tool.pyright]
 pythonVersion = "3.12"
+venvPath = "."
+venv = ".venv"
 exclude = ["**/proto", "**/.venv"]

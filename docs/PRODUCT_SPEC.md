@@ -26,6 +26,19 @@ listed at the end.
   transcriptions, model list) authenticated with per-user API keys
 - Monitoring dashboards via Prometheus + **Grafana**
 - Everything runs in **Docker** (server, worker, frontend, monitoring, PostgreSQL)
+- Model replicas via **Deployment groups**: a deployment groups replicas of one
+  model / cluster / engine / profile; each replica is its own `ModelInstance` row.
+  Manual scale from the UI (`replicas` at deploy time, `−`/`+` on the group),
+  `replicas ∈ [1, 8]`. Anti-affinity placement by default (Pass 1a: different
+  workers → Pass 1b: different GPUs of the same worker → Pass 2: fallback onto an
+  occupied GPU when nothing else fits). Manual GPU selection supports only a
+  single replica; multi-replica deploys use automatic placement with
+  anti-affinity. Autoscaling (Release B) is a separate release behind the
+  Usage Metering gate (roadmap phase 5); its policy is intentionally not
+  specified here.
+  Deployment groups inherit instance permissions: list/scale/delete are available
+  to any authenticated user (parity with per-instance lifecycle routes); admin is
+  required only for clusters/users/workers.
 
 ### Explicitly out of scope (not requested in the prompt)
 
@@ -34,7 +47,6 @@ listed at the end.
 - Kubernetes operator
 - HA / leader election (single server; PostgreSQL used only for storage)
 - Redis / queues (no message broker)
-- Model replicas / autoscaling
 - llama.cpp backend
 
 ### Implementation decisions

@@ -2,8 +2,9 @@
 
 ## Spec status
 
-In [PRODUCT_SPEC](../PRODUCT_SPEC.md), replicas/autoscaling are explicitly out
-of scope. This phase revisits that decision; update the spec before starting.
+Release A — manual Deployment groups, anti-affinity placement, least-loaded
+routing — is delivered. Remaining: Release B autoscaling; the
+`apply_scale(set_range=False)` hook is already in place.
 
 ## Problem
 
@@ -24,13 +25,16 @@ One instance = one point of failure and one GPU's TPS ceiling. The gateway
   allows.
 - Port from the 8010–8100 pool — `_alloc_port` in `services/scheduler.py`
   already exists.
+- Manual placement supports only single replica; multi-replica deploys use
+  automatic placement with anti-affinity (Pass 1a different worker → Pass 1b
+  different GPU on same worker → Pass 2 fallback).
 
 ### Autoscaling
 
-- First slice — **manual replicas** (deploy with `replicas=N`, scale in/out from
-  the UI): simpler, immediate value. Autoscaling second: a server background
-  loop (modeled on `mark_disconnected` in `services/workers_svc.py`) driven by
-  gateway metrics (queue/latency/TPS) → scale up/down with cooldown.
+- Manual replicas (deploy with `replicas=N`, scale in/out from the UI) are
+  **delivered** (Release A). Remaining: a server background loop (modeled on
+  `mark_disconnected` in `services/workers_svc.py`) driven by gateway metrics
+  (queue/latency/TPS) → scale up/down with cooldown (Release B).
 
 ### Gateway
 
