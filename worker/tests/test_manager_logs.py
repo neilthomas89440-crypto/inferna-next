@@ -120,6 +120,10 @@ async def test_statuses_does_not_block_on_docker_logs() -> None:
     container = _Container(f"{CONTAINER_PREFIX}abc", log_text="slow", delay=0.4)
     manager = _real_manager([container])
     _track_running(manager, "abc")
+    slow_containers = [
+        _Container(f"{CONTAINER_PREFIX}slow{index}", log_text="slow", delay=0.4)
+        for index in range(3)
+    ]
     for index in range(3):
         manager._instances[f"slow{index}"] = {
             "state": "running",
@@ -128,9 +132,8 @@ async def test_statuses_does_not_block_on_docker_logs() -> None:
             "started_at": time.monotonic(),
             "generation": 1,
         }
-        manager._docker.containers._containers.append(
-            _Container(f"{CONTAINER_PREFIX}slow{index}", log_text="slow", delay=0.4)
-        )
+    slow_containers.append(container)
+    manager._docker = _Docker(slow_containers)
 
     statuses = await asyncio.wait_for(manager.statuses(), timeout=2)
     assert len(statuses) == 4
