@@ -1,4 +1,13 @@
 version: 2
+# Dependabot keeps dependencies fresh without fighting this project's pinned contracts:
+#   * Python is pinned to 3.12 and Node to 24 (CI matrix) — runtime base images must not move
+#     across minor/major versions on their own.
+#   * Major upgrades (eslint 10, vite 8, typescript 7, …) are deliberate work, not churn: they
+#     change lint rules, build output or peer ranges, so they land in a human-owned PR.
+#   * `grpcio-tools` carries the protoc that generates `*_pb2*` stubs: a bump changes generated
+#     code, and `proto-check` requires the stubs to be regenerated in the same commit. Those are
+#     handled manually (`bash scripts/gen-proto.sh`), never as part of a grouped bump.
+# Everything else still flows automatically as grouped minor/patch PRs.
 updates:
   - package-ecosystem: "uv"
     directories:
@@ -6,26 +15,33 @@ updates:
       - "/worker"
     schedule:
       interval: "weekly"
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 3
     groups:
+      python-runtime-deps:
+        dependency-type: "production"
+        update-types: ["minor", "patch"]
       python-dev-deps:
         dependency-type: "development"
+        update-types: ["minor", "patch"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "grpcio-tools"
 
   - package-ecosystem: "npm"
     directory: "/frontend"
     schedule:
       interval: "weekly"
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 3
     groups:
-      frontend-dev-deps:
-        dependency-type: "development"
       frontend-runtime-deps:
         dependency-type: "production"
+        update-types: ["minor", "patch"]
+      frontend-dev-deps:
+        dependency-type: "development"
+        update-types: ["minor", "patch"]
     ignore:
-      # React major upgrades are deliberate work, not churn: see docs/roadmap if planned.
-      - dependency-name: "react"
-        update-types: ["version-update:semver-major"]
-      - dependency-name: "react-dom"
+      - dependency-name: "*"
         update-types: ["version-update:semver-major"]
 
   - package-ecosystem: "github-actions"
@@ -43,3 +59,11 @@ updates:
       - "/frontend"
     schedule:
       interval: "monthly"
+    ignore:
+      # Runtime pins tracked by the CI matrix — patch-level refreshes only.
+      - dependency-name: "python"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "node"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "nginx"
+        update-types: ["version-update:semver-major"]
