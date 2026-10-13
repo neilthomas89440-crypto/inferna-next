@@ -1,0 +1,45 @@
+version: 2
+updates:
+  - package-ecosystem: "uv"
+    directories:
+      - "/server"
+      - "/worker"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      python-dev-deps:
+        dependency-type: "development"
+
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      frontend-dev-deps:
+        dependency-type: "development"
+      frontend-runtime-deps:
+        dependency-type: "production"
+    ignore:
+      # React major upgrades are deliberate work, not churn: see docs/roadmap if planned.
+      - dependency-name: "react"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "react-dom"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: "docker"
+    directories:
+      - "/server"
+      - "/worker"
+      - "/frontend"
+    schedule:
+      interval: "monthly"
