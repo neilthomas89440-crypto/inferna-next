@@ -22,6 +22,10 @@ coverage/
 playwright-report/
 test-results/
 
+# Local run artifacts (bench / parity / soak / replay output)
+artifacts/
+bench-out/
+
 # Models
 models/
 
