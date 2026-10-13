@@ -42,8 +42,9 @@ One instance = one point of failure and one GPU's TPS ceiling. The gateway
 
 ## Out of scope
 
-Cross-host tensor parallel (one model across multiple hosts) — a separate
-topic requiring an EngineConfig and transport redesign.
+Cross-host tensor parallel (one model across multiple hosts) — moved out of this
+direction into [Distributed inference](06-distributed-inference.md), which owns
+the EngineConfig and transport redesign.
 
 ## Acceptance criteria
 
