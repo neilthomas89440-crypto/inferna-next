@@ -1,0 +1,82 @@
+name: Bug report
+description: Something is broken or behaves unexpectedly
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. For anything security-related, use
+        [private vulnerability reporting](../security/advisories/new) instead of this form.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you observed, including the exact error text or screenshot.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. docker compose -f docker-compose.yml -f docker-compose.mock.yml up --build
+        2. deploy Qwen/Qwen2.5-0.5B-Instruct
+        3. …
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - server (REST API / gRPC / scheduler)
+        - gateway (OpenAI-compatible /v1)
+        - worker (agent / engine lifecycle / GPU probes)
+        - frontend (web UI)
+        - compose / deployment
+        - docs
+        - unsure
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version / commit
+      description: Output of `git rev-parse --short HEAD`, or the release tag.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      placeholder: |
+        OS: Windows 11 / Ubuntu 24.04
+        GPU: NVIDIA RTX 4090, driver 550, CUDA 12.4  (or "mock engine")
+        Run mode: docker compose / bare-metal worker
+        INFERNA_* vars that differ from .env.example
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: "`docker compose logs server worker`, server stderr, browser console."
+      render: text
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues for the same problem
+          required: true
+        - label: This is not a security vulnerability (those go to private reporting)
+          required: true

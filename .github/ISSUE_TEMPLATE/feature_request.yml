@@ -1,0 +1,49 @@
+name: Feature request
+description: Propose a capability or an improvement
+title: "[feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check [`docs/roadmap/`](../../docs/roadmap/README.md) first — the platform has a staged
+        roadmap with acceptance criteria, and the remaining stages already have executable plans in
+        [`docs/roadmap/plans/`](../../docs/roadmap/plans/README.md). Proposals that fit an existing
+        stage are best filed as comments on the matching roadmap document.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What can’t you do today, and what does it cost you?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Behaviour you would expect, plus how you would verify it works.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds you tried, or other designs you weighed.
+    validations:
+      required: false
+  - type: input
+    id: roadmap
+    attributes:
+      label: Related roadmap stage
+      description: "Optional: e.g. stage 7 — distributed inference, or “outside the current roadmap”."
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and the roadmap for this idea
+          required: true
+        - label: This stays inside the project’s stated scope (no k8s/queues/billing/CLI — see roadmap §8)
+          required: true
