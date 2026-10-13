@@ -113,6 +113,13 @@ class InstanceOut(ORMModel):
     worker_name: str | None = None
 
 
+class InstanceLogsOut(ORMModel):
+    instance_id: uuid.UUID
+    state: str
+    log_tail: str | None
+    updated_at: datetime
+
+
 class WorkerOut(ORMModel):
     id: uuid.UUID
     cluster_id: uuid.UUID

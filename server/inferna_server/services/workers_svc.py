@@ -32,6 +32,9 @@ logger = structlog.get_logger(__name__)
 SYNC_INTERVAL_SECONDS = 5
 DISCONNECT_AFTER_SECONDS = 30
 DISCONNECT_CHECK_INTERVAL_SECONDS = 15
+# Worker sends the last ~20 container log lines; cap defensively so a chatty engine
+# cannot grow a row without bound (keeps the newest bytes).
+LOG_TAIL_MAX_CHARS = 8192
 
 FIXTURES_DIR = Path(__file__).resolve().parent.parent / "fixtures"
 
@@ -217,6 +220,8 @@ async def sync_worker(
             continue
         inst.state = status.state
         inst.error_detail = status.detail or None
+        if status.log_tail:
+            inst.log_tail = status.log_tail[-LOG_TAIL_MAX_CHARS:]
         if status.port:
             inst.port = status.port
 

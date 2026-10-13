@@ -147,15 +147,15 @@ class InstanceManager:
                         # keep generation as is
                 elif command.action == "delete":
                     self._instances.pop(command.instance_id, None)
-            return self.statuses()
+            return await self.statuses()
         # Real mode: coalesce into pending if batch is running
         if self._batch_task is not None and not self._batch_task.done():
             for cmd in commands:
                 self._pending[cmd.instance_id] = cmd
-            return self.statuses()
+            return await self.statuses()
         # otherwise start new batch
         self._batch_task = asyncio.create_task(self._apply_batch(commands))
-        return self.statuses()
+        return await self.statuses()
 
     async def _apply_batch(self, commands: list[cluster_pb2.InstanceCommand]) -> None:
         try:
@@ -457,7 +457,22 @@ class InstanceManager:
         except Exception:  # noqa: BLE001
             return ""
 
-    def statuses(self) -> list[cluster_pb2.InstanceStatus]:
+    def _mock_log_tail(self, state: str, info: dict[str, Any]) -> str:
+        """Deterministic stand-in for container logs so mock runs exercise the log path."""
+        port = info.get("port") or 0
+        lines = [
+            "mock: resolving model weights",
+            "mock: loading model into GPU memory",
+        ]
+        if state == "running":
+            lines.append(f"mock: engine ready on port {port}")
+        elif state == "error":
+            lines.append(f"mock: error — {info.get('detail') or 'unknown'}")
+        else:
+            lines.append("mock: starting engine")
+        return "\n".join(lines)
+
+    async def statuses(self) -> list[cluster_pb2.InstanceStatus]:
         now = time.monotonic()
         result: list[cluster_pb2.InstanceStatus] = []
         for instance_id, info in self._instances.items():
@@ -466,6 +481,14 @@ class InstanceManager:
             if self.mock and state == "starting" and elapsed >= MOCK_START_DELAY_SECONDS:
                 state = "running"
                 info["state"] = "running"
+            if self.mock:
+                info["log_tail"] = self._mock_log_tail(state, info)
+            elif state in ("starting", "running", "error"):
+                # `docker logs` blocks: keep the Sync loop responsive by reading off-loop.
+                # An empty read (container gone, no output yet) keeps the previous snapshot.
+                tail = await asyncio.to_thread(self._container_log_tail, instance_id)
+                if tail:
+                    info["log_tail"] = tail
             result.append(
                 cluster_pb2.InstanceStatus(
                     instance_id=instance_id,
@@ -473,6 +496,7 @@ class InstanceManager:
                     detail=info.get("detail", ""),
                     port=info.get("port") or 0,
                     generation=info.get("generation", 0),
+                    log_tail=info.get("log_tail", ""),
                 )
             )
         return result

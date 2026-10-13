@@ -3,6 +3,7 @@ import {
   useDeleteDeployment,
   useDeleteInstance,
   useDeployments,
+  useInstanceLogs,
   useRestartInstance,
   useScaleDeployment,
   useStopInstance,
@@ -22,6 +23,7 @@ export default function InstancesPage() {
   const [deleting, setDeleting] = useState<string | null>(null);
   const [deletingGroup, setDeletingGroup] = useState<string | null>(null);
   const [endpoint, setEndpoint] = useState<Instance | null>(null);
+  const [logsFor, setLogsFor] = useState<Instance | null>(null);
   const [copiedTarget, setCopiedTarget] = useState<string | null>(null);
   const [copyError, setCopyError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -184,6 +186,13 @@ export default function InstancesPage() {
                       )}
                     </td>
                     <td className="px-4 py-2 text-right">
+                      <button
+                        type="button"
+                        onClick={() => setLogsFor(inst)}
+                        className="mr-3 text-sm text-slate-600 hover:underline"
+                      >
+                        Logs
+                      </button>
                       {inst.desired_state !== "stopped" && inst.state !== "stopped" && (
                         <button
                           type="button"
@@ -311,6 +320,8 @@ export default function InstancesPage() {
           );
         })()}
 
+      {logsFor && <LogsDialog instance={logsFor} onClose={() => setLogsFor(null)} />}
+
       {deleting && (
         <ConfirmDialog
           title="Delete instance"
@@ -339,6 +350,47 @@ export default function InstancesPage() {
           onCancel={() => setDeletingGroup(null)}
         />
       )}
+    </div>
+  );
+}
+
+function LogsDialog({ instance, onClose }: { instance: Instance; onClose: () => void }) {
+  const logs = useInstanceLogs(instance.id);
+  const tail = logs.data?.log_tail?.trim();
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
+      <div className="w-full max-w-2xl rounded-lg bg-white p-6 shadow-xl">
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-semibold text-slate-800">
+            Logs — {instance.model?.display_name ?? instance.model_id}
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-sm text-slate-500 hover:text-slate-700"
+          >
+            Close
+          </button>
+        </div>
+        <div className="mt-2 flex items-center gap-2">
+          <StateBadge state={logs.data?.state ?? instance.state} />
+          <span className="text-xs text-slate-500">
+            Last snapshot reported by the worker — refreshed every 5 seconds, not a live stream.
+          </span>
+        </div>
+        <pre
+          data-testid="instance-logs"
+          className="mt-3 max-h-80 overflow-auto whitespace-pre-wrap rounded-md border border-slate-900 bg-slate-900 px-3 py-2 text-xs text-slate-100"
+        >
+          {logs.isLoading ? "Loading…" : tail ? tail : "No logs yet"}
+        </pre>
+        {logs.isError && (
+          <p className="mt-2 text-sm text-red-600">
+            Failed to load logs: {String(logs.error ?? "unknown error")}
+          </p>
+        )}
+      </div>
     </div>
   );
 }

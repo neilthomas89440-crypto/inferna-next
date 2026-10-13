@@ -80,6 +80,13 @@ export interface Instance {
   deployment_id: string;
 }
 
+export interface InstanceLogs {
+  instance_id: string;
+  state: InstanceState;
+  log_tail: string | null;
+  updated_at: string;
+}
+
 export interface Worker {
   id: string;
   cluster_id: string;

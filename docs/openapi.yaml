@@ -535,6 +535,36 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/model-instances/{instance_id}/logs:
+    get:
+      tags:
+      - instances
+      summary: Instance Logs
+      description: Last log snapshot the worker reported for this instance (no streaming).
+      operationId: instance_logs_api_v1_model_instances__instance_id__logs_get
+      security:
+      - OAuth2PasswordBearer: []
+      parameters:
+      - name: instance_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Instance Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstanceLogsOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /api/v1/deployments:
     get:
       tags:
@@ -1242,6 +1272,31 @@ components:
           title: Detail
       type: object
       title: HTTPValidationError
+    InstanceLogsOut:
+      properties:
+        instance_id:
+          type: string
+          format: uuid
+          title: Instance Id
+        state:
+          type: string
+          title: State
+        log_tail:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Log Tail
+        updated_at:
+          type: string
+          format: date-time
+          title: Updated At
+      type: object
+      required:
+      - instance_id
+      - state
+      - log_tail
+      - updated_at
+      title: InstanceLogsOut
     InstanceOut:
       properties:
         id:

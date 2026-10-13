@@ -57,7 +57,7 @@ async def test_mock_start_goes_running_after_delay() -> None:
 
     # Simulate elapsed time >= 2 s.
     manager._instances["abc"]["started_at"] = time.monotonic() - 5
-    statuses = manager.statuses()
+    statuses = await manager.statuses()
     assert statuses[0].state == "running"
 
 
@@ -65,7 +65,7 @@ async def test_mock_stop() -> None:
     manager = InstanceManager(MOCK_SETTINGS)
     await manager.reconcile([_start_command()])
     await manager.reconcile([_stop_command("abc")])
-    statuses = _status_map(manager.statuses())
+    statuses = _status_map(await manager.statuses())
     assert statuses["abc"].state == "stopped"
 
 
@@ -73,7 +73,7 @@ async def test_mock_delete_removes_instance() -> None:
     manager = InstanceManager(MOCK_SETTINGS)
     await manager.reconcile([_start_command()])
     await manager.reconcile([_delete_command("abc")])
-    assert manager.statuses() == []
+    assert await manager.statuses() == []
 
 
 async def test_mock_requires_hf_token_error() -> None:
@@ -242,7 +242,7 @@ async def test_error_path_records_generation() -> None:
     assert "err" in manager._instances
     assert manager._instances["err"]["generation"] == 7
     assert manager._instances["err"]["state"] == "error"
-    statuses = manager.statuses()
+    statuses = await manager.statuses()
     m = {s.instance_id: s for s in statuses}
     assert m["err"].generation == 7
     await manager.shutdown()

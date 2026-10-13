@@ -8,6 +8,7 @@ import type {
   Deployment,
   DeployRequest,
   Instance,
+  InstanceLogs,
   ModelInfo,
   User,
   Worker,
@@ -100,6 +101,15 @@ export function useInstances() {
   return useQuery({
     queryKey: ["instances"],
     queryFn: () => api<Instance[]>("/model-instances"),
+    refetchInterval: LIVE_INTERVAL,
+  });
+}
+
+export function useInstanceLogs(id: string | null) {
+  return useQuery({
+    queryKey: ["instance-logs", id],
+    queryFn: () => api<InstanceLogs>(`/model-instances/${id}/logs`),
+    enabled: Boolean(id),
     refetchInterval: LIVE_INTERVAL,
   });
 }
