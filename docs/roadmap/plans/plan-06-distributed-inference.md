@@ -146,10 +146,14 @@ httpx (уже есть в проекте server; отдельный uv-прое�
   (Histogram, labels `model,engine,parallelism`), `inferna_inter_token_seconds` (то же),
   `inferna_output_tps` (то же). Существующие `inferna_requests_total`,
   `inferna_time_to_first_byte_seconds`, `inferna_tokens_total` не ломать.
-- `api/gateway.py` `_relay`/`_proxy`: TTFT = время первого content-чанка (часы `time.monotonic()`
-  в `_relay`), ITL — интервалы между чанками, TPS = `completion_tokens / (e2e - ttft)`; labels
-  `engine` из `instance.engine`, `parallelism` из `instance.parallel_mode or "single"` (после M2.1;
-  до него — литерал `"single"`). Заголовок ответа `X-Inferna-TTFT-Ms` (число с точкой).
+- `api/gateway.py` `_relay`/`_proxy`: TTFT = время первого **content**-чанка (часы `time.perf_counter()`;
+  чанк с одним `role` не считается), ITL — интервалы между content-чанками, TPS = `completion_tokens /
+  (e2e - ttft)`; labels `engine` из `instance.engine`, `parallelism` из `instance.parallel_mode or
+  "single"` (до M2.1 — литерал `"single"`).
+  **Заголовок `X-Inferna-TTFT-Ms` не реализован сознательно**: gateway стримит, поэтому на момент
+  отправки заголовков ответа TTFT ещё неизвестен, а HTTP-трейлеры OpenAI-клиенты не читают. Метрика —
+  единственный честный канал; если заголовок понадобится, его можно отдавать только для
+  не-стриминговых запросов (ценой буферизации ответа) — отдельное решение, не в этом срезе.
 - `deploy/grafana/dashboards/gateway.json` — панели TTFT p50/p95, ITL p95, tokens/s по
   `model`/`parallelism` (uid дашборда не менять).
 - Тест: `server/tests/test_gateway_telemetry.py::test_streaming_observes_ttft_itl_tps` (MockTransport

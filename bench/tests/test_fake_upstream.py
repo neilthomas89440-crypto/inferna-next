@@ -28,6 +28,19 @@ async def test_client_parses_the_fake_upstream_stream() -> None:
     assert len(result.itl_ms) == 3
 
 
+async def test_fake_upstream_can_run_without_auth_for_gateway_proxying() -> None:
+    """The gateway forwards only content-type and host, so an engine sees no credentials."""
+    app = FakeUpstream(chunks=2, delay=0.0, require_auth=False)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://fake") as client:
+        result = await chat(
+            client, "http://fake", "", "fake-model", [{"role": "user", "content": "hi"}]
+        )
+
+    assert result.ok
+    assert result.content_chunks == 2
+
+
 async def test_fake_upstream_requires_a_bearer_token() -> None:
     app = FakeUpstream(chunks=1, delay=0.0)
     transport = httpx.ASGITransport(app=app)

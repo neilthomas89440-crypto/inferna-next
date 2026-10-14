@@ -9,7 +9,7 @@ import json
 import re
 import time
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from datetime import datetime
 from typing import Any
 
@@ -36,9 +36,12 @@ from inferna_server.models import (
 )
 from inferna_server.services.metrics import (
     inferna_instance_active_requests,
+    inferna_inter_token_seconds,
+    inferna_output_tps,
     inferna_requests,
     inferna_time_to_first_byte_seconds,
     inferna_tokens,
+    inferna_ttft_seconds,
     inferna_usage_events_total,
 )
 from inferna_server.services.upstream_guard import (
@@ -539,6 +542,36 @@ def _with_stream_usage(raw_body: bytes) -> bytes:
     return json.dumps(payload).encode()
 
 
+def _content_deltas(text: str) -> Iterator[str]:
+    """Non-empty content deltas of the SSE chunk(s) in `text`.
+
+    Parsing per chunk is what makes TTFT/ITL content-based rather than "first bytes seen"
+    (a stream opens with a role-only chunk). Cost is a few microseconds per chunk.
+    """
+    for line in text.splitlines():
+        if not line.startswith("data:"):
+            continue
+        payload = line[5:].strip()
+        if not payload or payload == "[DONE]":
+            continue
+        try:
+            chunk = json.loads(payload)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(chunk, dict):
+            continue
+        for choice in chunk.get("choices") or []:
+            if not isinstance(choice, dict):
+                continue
+            delta = choice.get("delta")
+            content = (delta or {}).get("content") if isinstance(delta, dict) else None
+            if not content:
+                message = choice.get("message")
+                content = (message or {}).get("content") if isinstance(message, dict) else None
+            if isinstance(content, str) and content:
+                yield content
+
+
 async def _relay(
     resp: httpx.Response, model_name: str, path: str, ctx: UsageContext
 ) -> AsyncIterator[bytes]:
@@ -547,12 +580,23 @@ async def _relay(
     tail: list[str] = []
     outcome = "ok"
     completed = False
+    first_content_at: float | None = None
+    last_content_at: float | None = None
+    itl_ms: list[float] = []
     try:
         async for chunk in resp.aiter_bytes():
             if path in ("/v1/chat/completions", "/v1/embeddings"):
-                tail.append(chunk.decode("utf-8", "replace"))
+                text = chunk.decode("utf-8", "replace")
+                tail.append(text)
                 while len(tail) > 8 or sum(len(c) for c in tail) > 16384:
                     tail.pop(0)
+                for _ in _content_deltas(text):
+                    now = time.perf_counter()
+                    if first_content_at is None:
+                        first_content_at = now
+                    else:
+                        itl_ms.append((now - last_content_at) * 1000 if last_content_at else 0.0)
+                    last_content_at = now
             yield chunk
         completed = True
     except (httpx.TransportError, httpx.DecodingError) as exc:
@@ -567,6 +611,7 @@ async def _relay(
         tokens = _record_usage(model_name, tail)
         if completed and tokens is None:
             outcome = "no_usage_chunk"
+        _observe_serving(ctx, tokens, first_content_at, itl_ms)
         record_request(
             ctx,
             tokens_in=tokens[0] if tokens else 0,
@@ -575,6 +620,30 @@ async def _relay(
             outcome=outcome,
         )
         await resp.aclose()
+
+
+def _observe_serving(
+    ctx: UsageContext,
+    tokens: tuple[int, int] | None,
+    first_content_at: float | None,
+    itl_ms: list[float],
+) -> None:
+    """Publish TTFT, inter-token latency and throughput for one finished request.
+
+    A response header is deliberately *not* used for TTFT: the value is unknown when the
+    response headers are flushed (the gateway streams), and HTTP trailers are not honoured by
+    OpenAI clients — so the metric is the only truthful channel.
+    """
+    labels = (ctx.model_name, ctx.engine, ctx.parallelism)
+    if first_content_at is not None:
+        inferna_ttft_seconds.labels(*labels).observe(first_content_at - ctx.started)
+    for interval_ms in itl_ms:
+        inferna_inter_token_seconds.labels(*labels).observe(interval_ms / 1000)
+    if tokens is None or first_content_at is None:
+        return
+    generation_seconds = (time.perf_counter() - first_content_at)
+    if tokens[1] > 0 and generation_seconds > 0:
+        inferna_output_tps.labels(*labels).observe(tokens[1] / generation_seconds)
 
 
 async def _release_instance(instance_id: uuid.UUID, model_name: str) -> None:
@@ -623,6 +692,9 @@ async def _proxy(
         model_name=model_name,
         instance_id=instance.id,
         started=time.monotonic(),
+        engine=instance.engine,
+        # `parallel_mode` arrives with the multi-node contract; until then every request is single.
+        parallelism=getattr(instance, "parallel_mode", None) or "single",
     )
     # _resolve_target reserved the routing slot atomically with its selection
     # (one _active_lock section: select → stamp LRU → increment). From here on
