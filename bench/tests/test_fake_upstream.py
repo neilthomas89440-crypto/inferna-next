@@ -7,6 +7,7 @@ two runs must produce the same TTFT distribution within a few percent.
 from __future__ import annotations
 
 import httpx
+
 from bench.client import chat
 from bench.fake_upstream import FakeUpstream
 
