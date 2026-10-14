@@ -250,9 +250,9 @@ Executable plans for the remaining work live in [`docs/roadmap/plans/`](docs/roa
 | 0 | Production readiness — config validation, health/readiness, migrations, CI | ✅ delivered |
 | 1 | Inference gateway — OpenAI-compatible `/v1`, API keys, SSRF guard, metrics | ✅ delivered |
 | 2 | Diagnostics — instance logs and failure reasons in the UI | ✅ delivered |
-| 3 | Custom models — add any HF repo to the catalog from the UI | 🗺️ planned |
+| 3 | Custom models — add any HF repo to the catalog from the UI | ✅ delivered |
 | 4 | Deployments and manual replicas — groups, scale up/down, replacement of errored replicas | ✅ delivered |
-| 5 | Usage metering — per-user/model/key statistics, soft quotas | 🗺️ planned |
+| 5 | Usage metering — per-user/model/key statistics, soft quotas | ✅ delivered |
 | 6 | Autoscaling — policy on measured load, cooldown, whole-group scaling | 🗺️ planned |
 | 7 | Distributed inference — multi-node vLLM/SGLang, parity verdict, coding validation | 🗺️ planned |
 

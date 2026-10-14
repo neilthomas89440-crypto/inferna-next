@@ -33,8 +33,8 @@ Docker. Every step below is actual output, not an expectation:
 | `cd frontend && npx vitest run` | `21 passed` (18 + 3 new) |
 | `cd server && uv run python ../scripts/export-openapi.py --check` | up to date (+104 lines: POST/DELETE `/models`, `ModelCreate`) |
 | `bash scripts/gen-proto.sh && git diff --exit-code` | unchanged (no proto change in this slice) |
-| `bash scripts/check-migrations.sh` (Postgres) | **CI only** — no Docker/Postgres on this host; no migration in this slice |
-| `cd frontend && npx playwright test` | **CI only** — new `e2e/custom-model.spec.ts` (add → badge → deploy → running → delete) |
+| `bash scripts/check-migrations.sh` (Postgres) | **PASS in CI** (run 38545537698, `migrations` job) — no migration in this slice |
+| `cd frontend && npx playwright test` | **PASS in CI** (run 38545537698, `e2e` job, includes the new `e2e/custom-model.spec.ts`) — the first attempt failed in all three browsers because the card renders the repo id twice (display name defaults to it), so the strict locator matched two nodes; it now targets the display-name link |
 
 # Decisions recorded by this slice
 
