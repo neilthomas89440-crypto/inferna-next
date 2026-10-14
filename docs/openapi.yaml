@@ -1300,6 +1300,22 @@ components:
             const: auto
           title: Gpu Selection
           default: auto
+        nodes_per_replica:
+          type: integer
+          maximum: 8.0
+          minimum: 1.0
+          title: Nodes Per Replica
+          default: 1
+        parallel_mode:
+          type: string
+          enum:
+          - single
+          - dp
+          - pp
+          - tp
+          - pd
+          title: Parallel Mode
+          default: single
       type: object
       required:
       - model_id

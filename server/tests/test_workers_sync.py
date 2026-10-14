@@ -307,6 +307,37 @@ async def test_delete_command_for_orphan_container(db) -> None:
     assert ("missing-id", "delete") in actions
 
 
+async def test_register_reuses_the_row_when_only_the_hostname_changes(db) -> None:
+    """A worker is identified by its name; a new hostname updates that row.
+
+    Regression: the lookup keyed on hostname while the unique constraint keys on (cluster,
+    name), so re-registering the same name from a new hostname raised IntegrityError — the
+    Register RPC answered INTERNAL and the worker retried forever.
+    """
+    first = await register_worker(db, make_register(hostname="old-host", worker_name="node-a"))
+
+    second = await register_worker(db, make_register(hostname="node-a", worker_name="node-a"))
+
+    assert second.worker_id == first.worker_id
+    workers = (await db.execute(select(Worker))).scalars().all()
+    assert len(workers) == 1
+    assert workers[0].hostname == "node-a"
+    assert workers[0].name == "node-a"
+    assert workers[0].state == "connected"
+
+
+async def test_register_keeps_the_existing_name_when_another_row_owns_it(db) -> None:
+    """A second host configured with a taken name must not steal the first worker's row."""
+    await register_worker(db, make_register(hostname="host-a", worker_name="alpha"))
+    await register_worker(db, make_register(hostname="host-b", worker_name="beta"))
+
+    renamed = await register_worker(db, make_register(hostname="host-b", worker_name="alpha"))
+
+    workers = {w.name: w.hostname for w in (await db.execute(select(Worker))).scalars().all()}
+    assert workers == {"alpha": "host-a", "beta": "host-b"}
+    assert renamed.worker_id  # registration still succeeds
+
+
 async def test_mark_disconnected_ignores_stopped_desired(db) -> None:
     worker_id, token = await _register(db)
     instance_id = await _deploy_scheduled(db, worker_id)

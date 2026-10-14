@@ -19,7 +19,7 @@ from fastapi import APIRouter, Depends, FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from python_multipart.multipart import MultipartParser, parse_options_header
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from starlette.background import BackgroundTask
@@ -385,6 +385,13 @@ async def _resolve_target(
                     ModelInstance.model_id == model.id,
                     ModelInstance.state.in_(LIVE_STATES),
                     ModelInstance.port.isnot(None),
+                    # Multi-node: only the head serves the API. Followers hold no port, so the
+                    # filter above already excludes them — this keeps the rule explicit (and
+                    # protects against a follower that was given a port by mistake).
+                    or_(
+                        ModelInstance.parallel_group_id.is_(None),
+                        ModelInstance.node_rank == 0,
+                    ),
                 )
                 .options(selectinload(ModelInstance.worker))
                 .order_by(ModelInstance.created_at)
