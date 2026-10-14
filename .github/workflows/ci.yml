@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        dir: [server, worker]
+        dir: [server, worker, bench]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7

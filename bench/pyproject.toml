@@ -1,0 +1,44 @@
+[project]
+name = "inferna-bench"
+version = "0.1.0"
+description = "Inferna Next benchmark harness: latency/throughput measurement against the gateway or an engine"
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.28,<1",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "ruff",
+    "pyright",
+    "uvicorn",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "UP", "B", "C4", "SIM"]
+ignore = ["B008", "UP017"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E501"]
+
+# `bench` is this project's own package; without an explicit first-party list ruff classifies it
+# from the environment, which made the import-sorting check flip between runs (and fail in CI).
+[tool.ruff.lint.isort]
+known-first-party = ["bench"]
+
+[tool.pyright]
+pythonVersion = "3.12"
+venvPath = "."
+venv = ".venv"
+exclude = [".venv"]
