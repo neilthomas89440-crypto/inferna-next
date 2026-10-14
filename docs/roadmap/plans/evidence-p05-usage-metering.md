@@ -100,8 +100,8 @@ persisted in between).
 | `cd frontend && npx vitest run` | `24 passed` (21 + 3 new) |
 | `cd server && uv run python ../scripts/export-openapi.py --check` | up to date (+234 lines: `/usage`, `/users/{id}/limits`, schemas) |
 | `python scripts/usage-reconcile.py …` | exit 0, 0.00 % drift (§2) |
-| `bash scripts/check-migrations.sh` (Postgres) | **CI only** — no Docker/Postgres on this host; two new revisions must survive `upgrade → down → up` and upgrade-from-previous-release |
-| `cd frontend && npx playwright test` | **CI only** — new `e2e/usage.spec.ts` (key → `/v1` call → Usage page shows today's count) |
+| `bash scripts/check-migrations.sh` (Postgres) | **PASS in CI** (run 38596131903, `migrations` job 30s) — not runnable on this host (no Docker/Postgres). The first attempt failed on `downgrade()`: the SQLite batch rebuild drops `users_pkey`, which PostgreSQL refuses while `usage_records`/`api_keys` reference `users`; the downgrade is now dialect-aware and the SQLite cycle (`up → down → down → up`) was verified locally |
+| `cd frontend && npx playwright test` | **PASS in CI** (run 38596131903, `e2e` job 8m9s, includes the new `e2e/usage.spec.ts`) — the first version posted a model name absent from the catalog, so the gateway answered 404 before a usage context existed and nothing was counted; the spec now deploys the mock model, expects the proxied 502 and asserts the quota line picks the request up |
 
 # Decisions recorded by this slice
 
