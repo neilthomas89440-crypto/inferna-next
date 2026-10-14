@@ -12,7 +12,7 @@ import psutil
 import structlog
 from structlog.dev import ConsoleRenderer
 
-from inferna_worker.config import get_settings
+from inferna_worker.config import Settings, get_settings
 from inferna_worker.engines.manager import InstanceManager
 from inferna_worker.gpu import detect
 from inferna_worker.proto import cluster_pb2, cluster_pb2_grpc
@@ -35,12 +35,12 @@ def configure_logging(level: str) -> None:
     )
 
 
-def system_info() -> cluster_pb2.SystemInfo:
+def system_info(settings: Settings) -> cluster_pb2.SystemInfo:
     return cluster_pb2.SystemInfo(
         cpu_cores=psutil.cpu_count(logical=True) or 0,
         memory_mb=psutil.virtual_memory().total // (1024 * 1024),
         os=platform.system().lower(),
-        hostname=platform.node(),
+        hostname=settings.worker_hostname,
     )
 
 
@@ -74,7 +74,7 @@ async def run_loop(settings, manager: InstanceManager) -> None:
                 response = await stub.Register(
                     cluster_pb2.RegisterRequest(
                         cluster_token=settings.registration_token,
-                        hostname=platform.node(),
+                        hostname=settings.worker_hostname,
                         worker_name=settings.worker_name,
                         cluster_name=settings.cluster_name,
                         version=VERSION,
@@ -104,7 +104,7 @@ async def run_loop(settings, manager: InstanceManager) -> None:
                 request = cluster_pb2.SyncRequest(
                     worker_id=worker_id,
                     worker_token=worker_token,
-                    system=system_info(),
+                    system=system_info(settings),
                     gpus=gpu_infos(detect(mock=settings.mock_engine, tick=tick)),
                     instances=await manager.statuses(),
                 )
@@ -130,7 +130,7 @@ async def main() -> None:
         "inferna worker starting",
         server=settings.server_url,
         mock=settings.mock_engine,
-        hostname=platform.node(),
+        hostname=settings.worker_hostname,
     )
 
     manager = InstanceManager(settings)

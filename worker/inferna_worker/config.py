@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import platform
 from functools import lru_cache
 
 import structlog
@@ -22,6 +23,9 @@ class Settings(BaseSettings):
     server_url: str = "localhost:9091"
     registration_token: str = "inferna-registration-token"
     worker_name: str = ""
+    # Identity the server keys workers by. Defaults to the machine name; override it to run
+    # more than one worker process on one host (local multi-node stacks, tests).
+    worker_hostname: str = Field(default_factory=platform.node)
     cluster_name: str = ""
     mock_engine: bool = False
     models_dir: str = "./models"

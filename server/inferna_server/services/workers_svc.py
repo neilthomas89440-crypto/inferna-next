@@ -12,6 +12,7 @@ from pathlib import Path
 import grpc
 import structlog
 from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -53,6 +54,40 @@ def generate_worker_token() -> str:
 
 def grpc_error(code: grpc.StatusCode, detail: str) -> grpc.aio.AioRpcError:
     return grpc.aio.AioRpcError(code, grpc.aio.Metadata(), grpc.aio.Metadata(), detail)
+
+
+def _apply_parallelism(config: cluster_pb2.EngineConfig, instance: ModelInstance) -> None:
+    """Fill `Parallelism`/`Rendezvous` for a rank of a parallel group.
+
+    Single-node instances carry no group id and leave the two messages empty, which is exactly
+    the pre-multi-node contract — the worker's command line does not change for them.
+
+    `MASTER_ADDR`/`MASTER_PORT` travel in `Rendezvous.env` so the address a rank must dial is
+    declared by the server (invariant §3.4). The interface/`VLLM_HOST_IP` stay worker-side
+    decisions: only the worker knows its NICs.
+    """
+    if instance.parallel_group_id is None or instance.rendezvous is None:
+        return
+    host, _, port = instance.rendezvous.rpartition(":")
+    node_rank = instance.node_rank or 0
+    world_size = instance.world_size or 1
+    config.parallelism.CopyFrom(
+        cluster_pb2.Parallelism(
+            mode=instance.parallel_mode or "single",
+            tensor_parallel=len(instance.gpu_indexes or []),
+            pipeline_parallel=world_size if instance.parallel_mode == "pp" else 1,
+            world_size=world_size,
+        )
+    )
+    config.rendezvous.CopyFrom(
+        cluster_pb2.Rendezvous(
+            master_address=host,
+            master_port=int(port) if port.isdigit() else 0,
+            node_rank=node_rank,
+            num_nodes=world_size,
+            env=[f"MASTER_ADDR={host}", f"MASTER_PORT={port}"],
+        )
+    )
 
 
 async def register_worker(
@@ -102,18 +137,56 @@ async def register_worker(
             ) from None
 
     token = generate_worker_token()
+    name = request.worker_name or request.hostname
+    # Both (cluster, name) and (cluster, hostname) are unique, so identity resolution has to
+    # respect both: prefer the machine (hostname), fall back to the configured name, and never
+    # write a value that another row already owns. Getting this wrong used to insert a
+    # duplicate name (IntegrityError → INTERNAL to the worker, which then retried forever).
     worker = (
         await db.execute(
             select(Worker).where(
-                Worker.cluster_id == cluster.id, Worker.hostname == request.hostname
+                Worker.cluster_id == cluster.id,
+                Worker.name == name,
+                Worker.hostname == request.hostname,
             )
         )
     ).scalar_one_or_none()
+    matched_by = "both" if worker is not None else ""
+    if worker is None:
+        worker = (
+            await db.execute(
+                select(Worker).where(
+                    Worker.cluster_id == cluster.id, Worker.hostname == request.hostname
+                )
+            )
+        ).scalar_one_or_none()
+        matched_by = "hostname" if worker is not None else ""
+    if worker is None:
+        worker = (
+            await db.execute(
+                select(Worker).where(Worker.cluster_id == cluster.id, Worker.name == name)
+            )
+        ).scalar_one_or_none()
+        matched_by = "name" if worker is not None else ""
+
+    async def _available(field: str, value: str) -> bool:
+        """True when no other row in the cluster already uses `value` for `field`."""
+        assert worker is not None
+        column = Worker.name if field == "name" else Worker.hostname
+        taken = (
+            await db.execute(
+                select(Worker.id).where(
+                    Worker.cluster_id == cluster.id, column == value, Worker.id != worker.id
+                )
+            )
+        ).scalar_one_or_none()
+        return taken is None
+
     if worker is None:
         worker = Worker(
             cluster_id=cluster.id,
             hostname=request.hostname,
-            name=request.worker_name or request.hostname,
+            name=name,
             state="connected",
             token_hash=sha256_hex(token),
             version=request.version or None,
@@ -122,16 +195,36 @@ async def register_worker(
         )
         db.add(worker)
     else:
-        # Reuse existing worker (same hostname): rotate its token.
+        # Reuse the existing worker (same identity): rotate its token and refresh what the
+        # worker reports about itself.
         worker.token_hash = sha256_hex(token)
         worker.state = "connected"
         worker.last_seen_at = utcnow()
         worker.address = address
-        if request.worker_name:
-            worker.name = request.worker_name
+        if matched_by == "name" and await _available("hostname", request.hostname):
+            # The machine moved (new container/renamed host): follow it.
+            worker.hostname = request.hostname
+        if request.worker_name and request.worker_name != worker.name:
+            if await _available("name", request.worker_name):
+                worker.name = request.worker_name
+            else:
+                logger.warning(
+                    "worker name already taken; keeping the existing name",
+                    worker_id=str(worker.id),
+                    requested=request.worker_name,
+                )
         if request.version:
             worker.version = request.version
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        # Two workers registering the same name concurrently: the unique index wins, and the
+        # loser gets a retryable answer instead of an INTERNAL error.
+        await db.rollback()
+        raise grpc_error(
+            grpc.StatusCode.ALREADY_EXISTS,
+            "another worker registered this name concurrently; retry",
+        ) from None
     await db.refresh(worker)
     logger.info(
         "worker registered",
@@ -255,6 +348,7 @@ async def sync_worker(
                     port=inst.port or 0,
                     requires_hf_token=inst.model.requires_hf_token,
                 )
+                _apply_parallelism(config, inst)
                 commands.append(
                     cluster_pb2.InstanceCommand(
                         instance_id=str(inst.id),

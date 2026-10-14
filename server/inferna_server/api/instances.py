@@ -14,7 +14,12 @@ from inferna_server.auth import get_current_user
 from inferna_server.db import get_db
 from inferna_server.models import Cluster, Deployment, Model, ModelInstance, User
 from inferna_server.schemas import DeployRequest, InstanceLogsOut, InstanceOut, ManualGpuSelection
-from inferna_server.services.scheduler import allocate_manual, allocate_replicas
+from inferna_server.services.scheduler import (
+    allocate_manual,
+    allocate_parallel_replicas,
+    allocate_replicas,
+    rendezvous_host,
+)
 
 router = APIRouter(prefix="/model-instances", tags=["instances"])
 
@@ -55,26 +60,25 @@ async def deploy(
             status_code=400,
             detail=f"engine '{body.engine}' does not support category '{model.category}'",
         )
-    if isinstance(body.gpu_selection, ManualGpuSelection) and body.replicas != 1:
+    multi = body.nodes_per_replica > 1
+    if isinstance(body.gpu_selection, ManualGpuSelection) and (body.replicas != 1 or multi):
         raise HTTPException(
             status_code=400, detail="manual gpu selection supports a single replica"
         )
+    if multi and body.parallel_mode == "single":
+        raise HTTPException(
+            status_code=400,
+            detail="parallel_mode must be dp, pp, tp or pd for a multi-node deploy",
+        )
+    if not multi and body.parallel_mode != "single":
+        raise HTTPException(status_code=400, detail="parallel_mode requires nodes_per_replica > 1")
+    if multi and body.replicas != 1:
+        raise HTTPException(
+            status_code=400,
+            detail="multi-node deploy supports one replica group for now",
+        )
 
     try:
-        if isinstance(body.gpu_selection, ManualGpuSelection):
-            worker, gpu_indexes, port = await allocate_manual(
-                db,
-                body.cluster_id,
-                body.gpu_selection.worker_id,
-                body.gpu_selection.gpu_indexes,
-                model.vram_required_mb,
-                body.engine,
-            )
-            allocations = [(worker, gpu_indexes, port)]
-        else:
-            allocations = await allocate_replicas(
-                db, cluster.id, model.vram_required_mb, body.engine, body.replicas, used=set()
-            )
         deployment = Deployment(
             model_id=model.id,
             cluster_id=cluster.id,
@@ -82,26 +86,76 @@ async def deploy(
             profile=body.profile,
             min_replicas=body.replicas,
             max_replicas=body.replicas,
+            nodes_per_replica=body.nodes_per_replica,
+            parallel_mode=body.parallel_mode,
         )
         instances: list[ModelInstance] = []
-        for worker, gpu_indexes, port in allocations:
-            instance = ModelInstance(
-                model_id=model.id,
-                cluster_id=cluster.id,
-                worker_id=worker.id,
-                engine=body.engine,
-                profile=body.profile,
-                gpu_indexes=gpu_indexes,
-                state="scheduled",
-                desired_state="running",
-                generation=1,
-                port=port,
-                deployment=deployment,
+        if multi:
+            # One parallel group: `nodes_per_replica` ranks, one host each, head first.
+            allocations = await allocate_parallel_replicas(
+                db, cluster.id, model.vram_required_mb, body.engine, body.nodes_per_replica
             )
-            instance.model = model
-            instance.worker = worker
-            instance.worker_name = worker.name
-            instances.append(instance)
+            head = allocations[0]
+            head_host = rendezvous_host(head.worker.address, head.worker.hostname)
+            rendezvous = f"{head_host}:{head.rendezvous_port}"
+            group_id = uuid.uuid4()
+            for allocation in allocations:
+                instance = ModelInstance(
+                    model_id=model.id,
+                    cluster_id=cluster.id,
+                    worker_id=allocation.worker.id,
+                    engine=body.engine,
+                    profile=body.profile,
+                    gpu_indexes=allocation.gpu_indexes,
+                    state="scheduled",
+                    desired_state="running",
+                    generation=1,
+                    # Followers publish no port: the gateway must only ever reach the head.
+                    port=allocation.instance_port,
+                    deployment=deployment,
+                    parallel_group_id=group_id,
+                    node_rank=allocation.node_rank,
+                    world_size=body.nodes_per_replica,
+                    parallel_mode=body.parallel_mode,
+                    rendezvous=rendezvous,
+                )
+                instance.model = model
+                instance.worker = allocation.worker
+                instance.worker_name = allocation.worker.name
+                instances.append(instance)
+        else:
+            if isinstance(body.gpu_selection, ManualGpuSelection):
+                worker, gpu_indexes, port = await allocate_manual(
+                    db,
+                    body.cluster_id,
+                    body.gpu_selection.worker_id,
+                    body.gpu_selection.gpu_indexes,
+                    model.vram_required_mb,
+                    body.engine,
+                )
+                allocations_single = [(worker, gpu_indexes, port)]
+            else:
+                allocations_single = await allocate_replicas(
+                    db, cluster.id, model.vram_required_mb, body.engine, body.replicas, used=set()
+                )
+            for worker, gpu_indexes, port in allocations_single:
+                instance = ModelInstance(
+                    model_id=model.id,
+                    cluster_id=cluster.id,
+                    worker_id=worker.id,
+                    engine=body.engine,
+                    profile=body.profile,
+                    gpu_indexes=gpu_indexes,
+                    state="scheduled",
+                    desired_state="running",
+                    generation=1,
+                    port=port,
+                    deployment=deployment,
+                )
+                instance.model = model
+                instance.worker = worker
+                instance.worker_name = worker.name
+                instances.append(instance)
         db.add(deployment)
         db.add_all(instances)
         await db.commit()

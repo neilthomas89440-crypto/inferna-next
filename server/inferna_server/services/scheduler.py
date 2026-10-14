@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Collection
+from dataclasses import dataclass
 
 from fastapi import HTTPException
 from sqlalchemy import or_, select
@@ -200,3 +202,136 @@ async def allocate_replicas(
         pending_vram[key] = pending_vram.get(key, 0) + vram_required_mb
         allocations.append((worker, [gpu_index], port))
     return allocations
+
+
+@dataclass(slots=True)
+class ParallelAllocation:
+    """One rank of a parallel group (multi-node).
+
+    `instance_port` and `rendezvous_port` are set on the head only: rank > 0 publishes no
+    port — the gateway must never reach a follower directly — and dials the head instead.
+    """
+
+    worker: Worker
+    gpu_indexes: list[int]
+    node_rank: int
+    instance_port: int | None = None
+    rendezvous_port: int | None = None
+
+
+def rendezvous_host(address: str | None, fallback: str) -> str:
+    """Bare host for a rendezvous address.
+
+    Workers report their address as a URL (`http://10.0.0.1`), but `MASTER_ADDR` must be a
+    bare host: passing the scheme through produces `http://10.0.0.1:8110`, which no rank can
+    dial. Strips scheme, path, and a port when the remainder is not a bare IPv6 literal.
+    """
+    raw = (address or "").strip() or fallback.strip()
+    for prefix in ("http://", "https://"):
+        if raw.lower().startswith(prefix):
+            raw = raw[len(prefix) :]
+    raw = raw.split("/", 1)[0].split("?", 1)[0].split("#", 1)[0]
+    if raw.startswith("["):  # [::1]:8110
+        return raw[1:].split("]", 1)[0]
+    host, _, port = raw.rpartition(":")
+    if port.isdigit() and host and ":" not in host:
+        return host
+    return raw
+
+
+def _alloc_rendezvous_port(
+    instances: list[ModelInstance], extra: set[int] | None = None
+) -> int:
+    """A free rendezvous port on the head's host, kept clear of its instance ports too."""
+    used = {i.port for i in instances if i.port} | (extra or set())
+    for instance in instances:
+        if instance.rendezvous and ":" in instance.rendezvous:
+            _, _, port = instance.rendezvous.rpartition(":")
+            if port.isdigit():
+                used.add(int(port))
+    for port in get_settings().rendezvous_port_range:
+        if port not in used:
+            return port
+    raise HTTPException(status_code=400, detail="no free rendezvous port in range")
+
+
+def _best_fitting_gpu(
+    worker: Worker,
+    supported: Collection[str],
+    usage: dict[int, int],
+    vram_required_mb: int,
+) -> tuple[int, int] | None:
+    """(free_mb, gpu_index) of the worker's largest fitting GPU of a supported vendor."""
+    best: tuple[int, int] | None = None
+    for gpu in worker.gpus:
+        if gpu.vendor not in supported:
+            continue
+        free = gpu.vram_mb - usage.get(gpu.index, 0)
+        if free >= vram_required_mb and (best is None or free > best[0]):
+            best = (free, gpu.index)
+    return best
+
+
+async def allocate_parallel_replicas(
+    db: AsyncSession,
+    cluster_id: uuid.UUID,
+    vram_required_mb: int,
+    engine: str,
+    nodes_per_replica: int,
+) -> list[ParallelAllocation]:
+    """Place one rank per host for a parallel group; the head is the rank every host can dial.
+
+    One rank per host is deliberate: two ranks of a pipeline on the same box share a NIC and
+    the same GPUs, which hides interconnect problems. The head must have a routable
+    `address` (roadmap §3.2) because every other rank dials it, and only the head receives an
+    instance port so traffic can only ever reach rank 0 (invariant §3.3).
+    """
+    workers = list((await _connected_workers(db, cluster_id)).scalars().all())
+    if not workers:
+        raise HTTPException(status_code=400, detail="no connected workers in cluster")
+
+    supported = ENGINE_VENDORS.get(engine, set())
+    fitting: list[tuple[int, Worker, int]] = []
+    for worker in workers:
+        usage = _gpu_usage(await _live_instances(db, worker.id))
+        best = _best_fitting_gpu(worker, supported, usage, vram_required_mb)
+        if best is not None:
+            fitting.append((best[0], worker, best[1]))
+
+    heads = [entry for entry in fitting if entry[1].address]
+    if not heads:
+        raise HTTPException(
+            status_code=400,
+            detail="no connected worker with a routable address for the rendezvous head",
+        )
+    if len(fitting) < nodes_per_replica:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"multi-node deploy needs {nodes_per_replica} hosts with "
+                f"{vram_required_mb} MB free, {len(fitting)} available"
+            ),
+        )
+
+    def _order(entry: tuple[int, Worker, int]) -> tuple[int, str]:
+        free_mb, worker, _ = entry
+        return (-free_mb, worker.name)
+
+    head = sorted(heads, key=_order)[0]
+    others = sorted((e for e in fitting if e[1].id != head[1].id), key=_order)
+    chosen = [head, *others[: nodes_per_replica - 1]]
+
+    head_instances = await _port_instances(db, head[1].id)
+    instance_port = _alloc_port(head_instances)
+    rendezvous_port = _alloc_rendezvous_port(head_instances)
+
+    return [
+        ParallelAllocation(
+            worker=worker,
+            gpu_indexes=[gpu_index],
+            node_rank=node_rank,
+            instance_port=instance_port if node_rank == 0 else None,
+            rendezvous_port=rendezvous_port if node_rank == 0 else None,
+        )
+        for node_rank, (_, worker, gpu_index) in enumerate(chosen)
+    ]

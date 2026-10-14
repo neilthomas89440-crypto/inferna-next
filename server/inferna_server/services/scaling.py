@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import structlog
+from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -29,6 +30,13 @@ async def apply_scale(
     # re-read the replica collection inside the lock; "deployment row → workers"
     # is a lock order no other path uses (the scheduler never touches deployments),
     # so there is no deadlock cycle. On SQLite FOR UPDATE is a no-op.
+    if deployment.nodes_per_replica > 1:
+        # Scaling single-node replicas inside a group deployment would create half groups: the
+        # ranks of one replica must start and stop together. Whole-group scaling is the M8 slice.
+        raise HTTPException(
+            status_code=400,
+            detail="multi-node deployments are scaled as whole groups (not supported yet)",
+        )
     await db.execute(
         select(Deployment).where(Deployment.id == deployment.id).with_for_update()
     )

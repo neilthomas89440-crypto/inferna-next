@@ -186,6 +186,10 @@ class DeployRequest(BaseModel):
     profile: Literal["latency", "throughput"]
     replicas: int = Field(default=1, ge=1, le=8)
     gpu_selection: ManualGpuSelection | Literal["auto"] = "auto"
+    # Multi-node: one replica is a group of `nodes_per_replica` hosts (one rank each).
+    # `nodes_per_replica == 1` + "single" is the pre-existing behaviour, unchanged.
+    nodes_per_replica: int = Field(default=1, ge=1, le=8)
+    parallel_mode: Literal["single", "dp", "pp", "tp", "pd"] = "single"
 
 
 class ScaleRequest(BaseModel):
