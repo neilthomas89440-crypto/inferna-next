@@ -38,8 +38,21 @@ List endpoint payload unchanged (logs are not part of `InstanceOut`; separate en
 | `cd frontend && npm run lint` | `eslint .` clean (incl. new e2e spec) |
 | `cd frontend && npx tsc --noEmit` | clean |
 | `cd frontend && npx vitest run` | `18 passed` (15 + 3 new) |
-| `bash scripts/check-migrations.sh` (Postgres) | **NOT RUN locally — no Docker/Postgres on this host; CI job `migrations` covers it** |
-| `cd frontend && npx playwright test` | **NOT RUN locally — needs the compose stack; CI job `e2e` covers `e2e/instance-logs.spec.ts`** |
+| `bash scripts/check-migrations.sh` (Postgres) | **PASS in CI** (run 38410142815, `migrations` job 31s) — not runnable on this host (no Docker/Postgres) |
+| `cd frontend && npx playwright test` | **PASS in CI** (run 38410142815, `e2e` job 7m34s, includes the new `e2e/instance-logs.spec.ts`) |
+
+CI on PR #22: `backend (server)`, `backend (worker)`, `frontend`, `migrations`, `proto-check`,
+`openapi-check`, `e2e` — all pass; merged as `94a1046`.
+
+# CI follow-ups (found by CI, not by the local gate run)
+
+Local pyright was stale (`v1.1.411 -> v1.1.414` available) and did not flag two issues:
+
+- `worker/inferna_worker/main.py:109` passed the `statuses()` coroutine into `SyncRequest.instances`
+  without awaiting it → fixed in `09141b9`.
+- `worker/tests/test_manager_logs.py` reached into a private `Optional` attribute of the fake
+  docker client (`reportOptionalMemberAccess`) → the fake client is now reassigned through a typed
+  constructor call; the test still asserts the non-blocking read.
 
 # Files changed
 
