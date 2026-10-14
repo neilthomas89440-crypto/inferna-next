@@ -47,6 +47,10 @@ class UsageContext:
     model_name: str
     instance_id: uuid.UUID
     started: float
+    # Serving telemetry labels: the engine that handled the request and the topology it runs in
+    # ("single" until the multi-node contract adds `parallel_mode`).
+    engine: str = "unknown"
+    parallelism: str = "single"
 
 
 @dataclass(slots=True)

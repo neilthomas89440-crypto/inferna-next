@@ -30,10 +30,15 @@ class FakeUpstream:
         chunks: int = DEFAULT_CHUNKS,
         delay: float = DEFAULT_DELAY_SECONDS,
         model: str = "fake-model",
+        require_auth: bool = True,
     ) -> None:
         self.chunks = chunks
         self.delay = delay
         self.model = model
+        # Engines behind the gateway receive no client credentials (the gateway forwards only
+        # `content-type` and `host`), so `require_auth=False` is how this fixture stands in for
+        # a real engine; the default keeps it usable as a direct target in tests.
+        self.require_auth = require_auth
 
     async def __call__(self, scope: MutableMapping[str, Any], receive: Any, send: Any) -> None:
         if scope["type"] != "http":
@@ -42,7 +47,7 @@ class FakeUpstream:
         if scope["method"] != "POST" or not path.endswith("/v1/chat/completions"):
             await self._plain(send, 404, b'{"error":{"message":"not found"}}')
             return
-        if not self._authorized(scope):
+        if self.require_auth and not self._authorized(scope):
             await self._plain(send, 401, b'{"error":{"message":"unauthorized"}}')
             return
 
@@ -135,9 +140,14 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=9100)
     parser.add_argument("--chunks", type=int, default=DEFAULT_CHUNKS)
     parser.add_argument("--delay", type=float, default=DEFAULT_DELAY_SECONDS)
+    parser.add_argument(
+        "--no-auth",
+        action="store_true",
+        help="accept requests without a Bearer token (as an engine behind the gateway sees them)",
+    )
     args = parser.parse_args()
 
-    server_app = FakeUpstream(chunks=args.chunks, delay=args.delay)
+    server_app = FakeUpstream(chunks=args.chunks, delay=args.delay, require_auth=not args.no_auth)
     print(f"fake upstream on http://{args.host}:{args.port}", flush=True)
     uvicorn.run(server_app, host=args.host, port=args.port, log_level="warning")
     return 0

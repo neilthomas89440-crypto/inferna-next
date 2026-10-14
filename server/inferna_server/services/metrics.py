@@ -40,6 +40,27 @@ inferna_tokens = PrometheusCounter(
     "inferna_tokens", "Tokens served by kind", ["model", "kind"]  # kind: prompt | completion
 )  # exposed as `inferna_tokens_total`
 
+# Per-model serving telemetry (histograms, deliberately NOT in _ALL_GAUGES). The `parallelism`
+# label stays "single" until the multi-node contract lands; `engine` comes from the instance.
+inferna_ttft_seconds = Histogram(
+    "inferna_ttft_seconds",
+    "Time to the first content chunk of a streamed completion",
+    ["model", "engine", "parallelism"],
+    buckets=(0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 0.75, 1.0, 1.5, 2.5, 5.0, 10.0),
+)
+inferna_inter_token_seconds = Histogram(
+    "inferna_inter_token_seconds",
+    "Time between consecutive content chunks of a streamed completion",
+    ["model", "engine", "parallelism"],
+    buckets=(0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0),
+)
+inferna_output_tps = Histogram(
+    "inferna_output_tps",
+    "Output tokens per second per request (completion tokens over generation time)",
+    ["model", "engine", "parallelism"],
+    buckets=(1, 5, 10, 20, 30, 50, 75, 100, 200, 500),
+)
+
 # Usage accounting outcomes. Reconciles against `inferna_requests_total`: the number of
 # `usage_records` rows/requests should track gateway requests within the same window
 # (`scripts/usage-reconcile.sh` checks this).
