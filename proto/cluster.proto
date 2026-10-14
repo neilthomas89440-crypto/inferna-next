@@ -46,6 +46,7 @@ message InstanceStatus {
   string detail = 3;          // error text / progress note
   int32 port = 4;             // host port once running
   int64 generation = 5;
+  string log_tail = 6;        // last log lines of the engine container; empty when unavailable
 }
 
 message EngineConfig {

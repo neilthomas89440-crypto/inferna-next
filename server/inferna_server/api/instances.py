@@ -13,7 +13,7 @@ from sqlalchemy.orm import selectinload
 from inferna_server.auth import get_current_user
 from inferna_server.db import get_db
 from inferna_server.models import Cluster, Deployment, Model, ModelInstance, User
-from inferna_server.schemas import DeployRequest, InstanceOut, ManualGpuSelection
+from inferna_server.schemas import DeployRequest, InstanceLogsOut, InstanceOut, ManualGpuSelection
 from inferna_server.services.scheduler import allocate_manual, allocate_replicas
 
 router = APIRouter(prefix="/model-instances", tags=["instances"])
@@ -188,3 +188,23 @@ async def delete_instance(
     else:
         await db.delete(instance)
     await db.commit()
+
+
+@router.get("/{instance_id}/logs", response_model=InstanceLogsOut)
+async def instance_logs(
+    instance_id: uuid.UUID,
+    _: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> InstanceLogsOut:
+    """Last log snapshot the worker reported for this instance (no streaming)."""
+    instance = (
+        await db.execute(select(ModelInstance).where(ModelInstance.id == instance_id))
+    ).scalar_one_or_none()
+    if instance is None:
+        raise HTTPException(status_code=404, detail="instance not found")
+    return InstanceLogsOut(
+        instance_id=instance.id,
+        state=instance.state,
+        log_tail=instance.log_tail,
+        updated_at=instance.updated_at,
+    )

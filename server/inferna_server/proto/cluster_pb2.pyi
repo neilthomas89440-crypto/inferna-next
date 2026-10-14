@@ -67,18 +67,20 @@ class SystemInfo(_message.Message):
     def __init__(self, cpu_cores: _Optional[int] = ..., memory_mb: _Optional[int] = ..., os: _Optional[str] = ..., hostname: _Optional[str] = ...) -> None: ...
 
 class InstanceStatus(_message.Message):
-    __slots__ = ("instance_id", "state", "detail", "port", "generation")
+    __slots__ = ("instance_id", "state", "detail", "port", "generation", "log_tail")
     INSTANCE_ID_FIELD_NUMBER: _ClassVar[int]
     STATE_FIELD_NUMBER: _ClassVar[int]
     DETAIL_FIELD_NUMBER: _ClassVar[int]
     PORT_FIELD_NUMBER: _ClassVar[int]
     GENERATION_FIELD_NUMBER: _ClassVar[int]
+    LOG_TAIL_FIELD_NUMBER: _ClassVar[int]
     instance_id: str
     state: str
     detail: str
     port: int
     generation: int
-    def __init__(self, instance_id: _Optional[str] = ..., state: _Optional[str] = ..., detail: _Optional[str] = ..., port: _Optional[int] = ..., generation: _Optional[int] = ...) -> None: ...
+    log_tail: str
+    def __init__(self, instance_id: _Optional[str] = ..., state: _Optional[str] = ..., detail: _Optional[str] = ..., port: _Optional[int] = ..., generation: _Optional[int] = ..., log_tail: _Optional[str] = ...) -> None: ...
 
 class EngineConfig(_message.Message):
     __slots__ = ("engine", "model_name", "profile", "gpu_indexes", "vram_required_mb", "port", "requires_hf_token")

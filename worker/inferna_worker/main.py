@@ -106,7 +106,7 @@ async def run_loop(settings, manager: InstanceManager) -> None:
                     worker_token=worker_token,
                     system=system_info(),
                     gpus=gpu_infos(detect(mock=settings.mock_engine, tick=tick)),
-                    instances=manager.statuses(),
+                    instances=await manager.statuses(),
                 )
                 response = await stub.Sync(request)
                 await manager.reconcile(response.commands)

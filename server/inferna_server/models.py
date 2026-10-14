@@ -251,6 +251,7 @@ class ModelInstance(Base, TimestampMixin):
     generation: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     port: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    log_tail: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Computed (non-persistent) field, filled by API serialization.
     worker_name: str | None = None
