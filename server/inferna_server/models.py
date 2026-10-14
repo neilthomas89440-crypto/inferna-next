@@ -18,6 +18,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    Uuid,
     text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -183,6 +184,14 @@ class Deployment(Base):
             "min_replicas >= 1 AND max_replicas >= min_replicas AND max_replicas <= 8",
             name="ck_deployments_min_max",
         ),
+        CheckConstraint(
+            "nodes_per_replica >= 1 AND nodes_per_replica <= 8",
+            name="ck_deployments_nodes_per_replica",
+        ),
+        CheckConstraint(
+            "parallel_mode IS NULL OR parallel_mode IN ('single','dp','pp','tp','pd')",
+            name="ck_deployments_parallel_mode",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -196,6 +205,9 @@ class Deployment(Base):
     profile: Mapped[str] = mapped_column(String(16))
     min_replicas: Mapped[int] = mapped_column(default=1)
     max_replicas: Mapped[int] = mapped_column(default=1)
+    # Parallel groups (multi-node): 1 replica == 1 group of nodes_per_replica instances.
+    nodes_per_replica: Mapped[int] = mapped_column(Integer, server_default="1", nullable=False)
+    parallel_mode: Mapped[str | None] = mapped_column(String(16), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     # Written by apply_scale under the same commit as the replica change; NULL until the
     # first scale so it never implies a cooldown. Read by autoscaler cooldown in Release B.
@@ -240,6 +252,16 @@ class ModelInstance(Base, TimestampMixin):
                 "desired_state = 'running' OR state IN ('scheduled','starting','running')"
             ),
         ),
+        # One rank per parallel group: a concurrent double-insert loses here instead of
+        # creating two rank-0 heads. NULL group ids (single-node) are not constrained.
+        Index(
+            "uq_model_instances_group_rank",
+            "parallel_group_id",
+            "node_rank",
+            unique=True,
+            postgresql_where=text("parallel_group_id IS NOT NULL"),
+            sqlite_where=text("parallel_group_id IS NOT NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -266,6 +288,14 @@ class ModelInstance(Base, TimestampMixin):
     port: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
     log_tail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Multi-node: a parallel group is one logical replica; every row with a group id is a rank.
+    parallel_group_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True, index=True)
+    node_rank: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    world_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    parallel_mode: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # Rendezvous "host:port" of rank 0 — the only place this address lives (worker.address is
+    # deliberately portless; the gateway filters on node_rank == 0).
+    rendezvous: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     # Computed (non-persistent) field, filled by API serialization.
     worker_name: str | None = None
