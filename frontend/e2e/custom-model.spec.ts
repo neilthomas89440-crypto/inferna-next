@@ -24,7 +24,8 @@ test("custom model: add, badge, deploy, delete", async ({ page }) => {
   await page.getByRole("button", { name: "Add to catalog" }).click();
 
   await expect(page.getByTestId(`custom-badge-${REPO}`)).toBeVisible();
-  await expect(card.getByText("acme/llm-3b-instruct")).toBeVisible();
+  // The display name defaults to the repo id, and the mono line repeats it — target the link.
+  await expect(card.getByRole("link", { name: REPO })).toBeVisible();
 
   // Deploy it like any builtin model.
   await card.getByRole("button", { name: "Deploy" }).click();
