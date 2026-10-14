@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -32,6 +32,8 @@ class UserOut(ORMModel):
     email: str | None
     role: str
     is_active: bool
+    token_limit: int | None = None
+    request_limit: int | None = None
 
 
 class UserCreate(BaseModel):
@@ -214,3 +216,48 @@ class DashboardOut(BaseModel):
 InstanceOut.model_rebuild()
 WorkerOut.model_rebuild()
 DeploymentOut.model_rebuild()
+
+
+# --- usage ---
+
+
+class UserLimitsUpdate(BaseModel):
+    token_limit: int | None = Field(default=None, ge=0)
+    request_limit: int | None = Field(default=None, ge=0)
+
+
+class UsageRow(BaseModel):
+    period_start: date
+    model_id: uuid.UUID
+    model_name: str
+    user_id: uuid.UUID
+    username: str
+    api_key_id: uuid.UUID
+    requests: int
+    tokens_in: int
+    tokens_out: int
+    avg_latency_ms: int
+    # GPU-seconds are attributed to (model, cluster, day) — `Deployment` has no owner,
+    # so this value is identical for every user of the same model.
+    gpu_hours: float
+
+
+class UsageTotals(BaseModel):
+    requests: int
+    tokens_in: int
+    tokens_out: int
+    avg_latency_ms: int
+    gpu_hours: float
+
+
+class UsageLimits(BaseModel):
+    token_limit: int | None
+    request_limit: int | None
+    requests_used: int
+    tokens_used: int
+
+
+class UsageOut(BaseModel):
+    totals: UsageTotals
+    rows: list[UsageRow]
+    limits: UsageLimits | None = None

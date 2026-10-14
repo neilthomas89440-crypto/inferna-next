@@ -112,6 +112,42 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/users/{user_id}/limits:
+    put:
+      tags:
+      - users
+      summary: Set User Limits
+      description: Soft daily gateway limits for one user; `null` clears a limit.
+      operationId: set_user_limits_api_v1_users__user_id__limits_put
+      security:
+      - OAuth2PasswordBearer: []
+      parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: User Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserLimitsUpdate'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /api/v1/users/{user_id}/password:
     put:
       tags:
@@ -711,6 +747,57 @@ paths:
                 $ref: '#/components/schemas/DashboardOut'
       security:
       - OAuth2PasswordBearer: []
+  /api/v1/usage:
+    get:
+      tags:
+      - usage
+      summary: Usage
+      description: Daily aggregates. Admins see every user; everyone else sees only
+        their own rows.
+      operationId: usage_api_v1_usage_get
+      security:
+      - OAuth2PasswordBearer: []
+      parameters:
+      - name: days
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 90
+          minimum: 1
+          default: 7
+          title: Days
+      - name: model_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: Model Id
+      - name: key_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: Key Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsageOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /api/v1/compatibility:
     get:
       tags:
@@ -1613,6 +1700,127 @@ components:
       required:
       - access_token
       title: TokenResponse
+    UsageLimits:
+      properties:
+        token_limit:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Token Limit
+        request_limit:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Request Limit
+        requests_used:
+          type: integer
+          title: Requests Used
+        tokens_used:
+          type: integer
+          title: Tokens Used
+      type: object
+      required:
+      - token_limit
+      - request_limit
+      - requests_used
+      - tokens_used
+      title: UsageLimits
+    UsageOut:
+      properties:
+        totals:
+          $ref: '#/components/schemas/UsageTotals'
+        rows:
+          items:
+            $ref: '#/components/schemas/UsageRow'
+          type: array
+          title: Rows
+        limits:
+          anyOf:
+          - $ref: '#/components/schemas/UsageLimits'
+          - type: 'null'
+      type: object
+      required:
+      - totals
+      - rows
+      title: UsageOut
+    UsageRow:
+      properties:
+        period_start:
+          type: string
+          format: date
+          title: Period Start
+        model_id:
+          type: string
+          format: uuid
+          title: Model Id
+        model_name:
+          type: string
+          title: Model Name
+        user_id:
+          type: string
+          format: uuid
+          title: User Id
+        username:
+          type: string
+          title: Username
+        api_key_id:
+          type: string
+          format: uuid
+          title: Api Key Id
+        requests:
+          type: integer
+          title: Requests
+        tokens_in:
+          type: integer
+          title: Tokens In
+        tokens_out:
+          type: integer
+          title: Tokens Out
+        avg_latency_ms:
+          type: integer
+          title: Avg Latency Ms
+        gpu_hours:
+          type: number
+          title: Gpu Hours
+      type: object
+      required:
+      - period_start
+      - model_id
+      - model_name
+      - user_id
+      - username
+      - api_key_id
+      - requests
+      - tokens_in
+      - tokens_out
+      - avg_latency_ms
+      - gpu_hours
+      title: UsageRow
+    UsageTotals:
+      properties:
+        requests:
+          type: integer
+          title: Requests
+        tokens_in:
+          type: integer
+          title: Tokens In
+        tokens_out:
+          type: integer
+          title: Tokens Out
+        avg_latency_ms:
+          type: integer
+          title: Avg Latency Ms
+        gpu_hours:
+          type: number
+          title: Gpu Hours
+      type: object
+      required:
+      - requests
+      - tokens_in
+      - tokens_out
+      - avg_latency_ms
+      - gpu_hours
+      title: UsageTotals
     UserCreate:
       properties:
         username:
@@ -1634,6 +1842,22 @@ components:
       - username
       - password
       title: UserCreate
+    UserLimitsUpdate:
+      properties:
+        token_limit:
+          anyOf:
+          - type: integer
+            minimum: 0.0
+          - type: 'null'
+          title: Token Limit
+        request_limit:
+          anyOf:
+          - type: integer
+            minimum: 0.0
+          - type: 'null'
+          title: Request Limit
+      type: object
+      title: UserLimitsUpdate
     UserOut:
       properties:
         id:
@@ -1654,6 +1878,16 @@ components:
         is_active:
           type: boolean
           title: Is Active
+        token_limit:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Token Limit
+        request_limit:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Request Limit
       type: object
       required:
       - id

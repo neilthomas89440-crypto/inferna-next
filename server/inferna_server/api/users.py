@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from inferna_server.auth import get_current_user, hash_password, require_admin
 from inferna_server.db import get_db
 from inferna_server.models import User
-from inferna_server.schemas import PasswordChange, UserCreate, UserOut
+from inferna_server.schemas import PasswordChange, UserCreate, UserLimitsUpdate, UserOut
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -72,6 +72,24 @@ async def delete_user(
         raise HTTPException(status_code=400, detail="cannot delete the last admin")
     await db.delete(user)
     await db.commit()
+
+
+@router.put("/{user_id}/limits", response_model=UserOut)
+async def set_user_limits(
+    user_id: uuid.UUID,
+    body: UserLimitsUpdate,
+    _: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+) -> User:
+    """Soft daily gateway limits for one user; `null` clears a limit."""
+    user = await db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="user not found")
+    user.token_limit = body.token_limit
+    user.request_limit = body.request_limit
+    await db.commit()
+    await db.refresh(user)
+    return user
 
 
 @router.put("/{user_id}/password", response_model=UserOut)

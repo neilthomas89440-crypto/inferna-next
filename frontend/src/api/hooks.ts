@@ -11,6 +11,7 @@ import type {
   InstanceLogs,
   ModelInfo,
   User,
+  UsageOut,
   Worker,
 } from "./types";
 
@@ -129,6 +130,34 @@ export function useInstances() {
     queryKey: ["instances"],
     queryFn: () => api<Instance[]>("/model-instances"),
     refetchInterval: LIVE_INTERVAL,
+  });
+}
+
+export function useUsage(params: { days?: number; modelId?: string } = {}) {
+  const days = params.days ?? 7;
+  const search = new URLSearchParams({ days: String(days) });
+  if (params.modelId) {
+    search.set("model_id", params.modelId);
+  }
+  return useQuery({
+    queryKey: ["usage", days, params.modelId ?? null],
+    queryFn: () => api<UsageOut>(`/usage?${search.toString()}`),
+    refetchInterval: LIVE_INTERVAL,
+  });
+}
+
+export function useSetUserLimits() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { id: string; token_limit: number | null; request_limit: number | null }) =>
+      api<User>(`/users/${body.id}/limits`, {
+        method: "PUT",
+        body: JSON.stringify({
+          token_limit: body.token_limit,
+          request_limit: body.request_limit,
+        }),
+      }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["users"] }),
   });
 }
 

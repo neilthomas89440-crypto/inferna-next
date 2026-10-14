@@ -85,6 +85,56 @@
       "targets": [{ "expr": "sum by (model) (inferna_requests_total)", "legendFormat": "{{model}}", "refId": "A", "format": "table" }],
       "title": "Requests by model",
       "type": "table"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "reqps", "color": { "mode": "palette-classic" } },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "id": 7,
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "expr": "sum by (outcome) (rate(inferna_usage_events_total[5m]))",
+          "legendFormat": "{{outcome}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Usage accounting by outcome",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Ratio of accounted usage events to gateway requests. Below 1 means accounting is dropping requests (buffer overflow or unexpected path).",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1.5,
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "id": 8,
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(inferna_usage_events_total[5m])) / clamp_min(sum(rate(inferna_requests_total[5m])), 0.0001)",
+          "legendFormat": "accounted / gateway",
+          "refId": "A"
+        }
+      ],
+      "title": "Usage events vs gateway requests",
+      "type": "timeseries"
     }
   ],
   "refresh": "30s",

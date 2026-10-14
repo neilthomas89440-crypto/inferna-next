@@ -245,7 +245,7 @@ GET /api/v1/usage?days=7&model_id=<uuid>&key_id=<uuid>
   `inferna_usage_events_total` (`sum by (outcome) (rate(...))`) и сверку
   `sum(rate(inferna_usage_events_total[5m])) / sum(rate(inferna_requests_total[5m]))`
   (панель «usage events / gateway requests»); uid дашборда не меняется.
-- `scripts/usage-reconcile.sh` (новый, curl+jq): снять дельту `inferna_requests_total` и
+- `scripts/usage-reconcile.py` (новый, curl+jq): снять дельту `inferna_requests_total` и
   `inferna_tokens_total` из `/metrics` за окно, сравнить с суммой из `GET /api/v1/usage`
   (`days=1`) — печатать таблицу и падать при расхождении > 1 % (порог — параметр скрипта
   `RECONCILE_TOLERANCE_PCT`, по умолчанию 1). Это исполняемый вид гейта M8
@@ -255,7 +255,7 @@ GET /api/v1/usage?days=7&model_id=<uuid>&key_id=<uuid>
 `frontend/src/__tests__/UsagePage.test.tsx` (рендер строк, пустое состояние);
 e2e `frontend/e2e/usage.spec.ts`: логин → создать API-ключ (паттерн `e2e/keys.spec.ts`) → один
 запрос к `/v1/chat/completions` (в mock-стенде upstream отсутствует → 502, но запрос учитывается)
-→ `/usage` показывает строку с `requests ≥ 1` → `bash scripts/usage-reconcile.sh` печатает таблицу
+→ `/usage` показывает строку с `requests ≥ 1` → `python scripts/usage-reconcile.py` печатает таблицу
 и не падает (расхождение 0).
 
 ## Verification (сводно)
@@ -267,7 +267,7 @@ e2e `frontend/e2e/usage.spec.ts`: логин → создать API-ключ (п
 5. Стек mock: `docker compose -f docker-compose.yml -f docker-compose.mock.yml up -d --build
    postgres server worker` → e2e `npx playwright test e2e/usage.spec.ts`.
 6. Приёмка `05`: после gateway-запросов `GET /api/v1/usage` показывает per-user/model/day;
-   `bash scripts/usage-reconcile.sh` — расхождение в пределах допуска; стрим без usage-чанка
+   `python scripts/usage-reconcile.py` — расхождение в пределах допуска; стрим без usage-чанка
    (`INFERNA_GATEWAY_INJECT_STREAM_USAGE=false`) считается по запросам.
 
 ## Assumptions & contingencies

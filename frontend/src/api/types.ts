@@ -11,6 +11,8 @@ export interface User {
   email: string | null;
   role: Role;
   is_active: boolean;
+  token_limit?: number | null;
+  request_limit?: number | null;
 }
 
 export interface ApiKey {
@@ -137,4 +139,35 @@ export interface Deployment {
   created_at: string;
   model: ModelInfo | null;
   instances: Instance[];
+}
+
+export interface UsageRow {
+  period_start: string;
+  model_id: string;
+  model_name: string;
+  user_id: string;
+  username: string;
+  api_key_id: string;
+  requests: number;
+  tokens_in: number;
+  tokens_out: number;
+  avg_latency_ms: number;
+  gpu_hours: number;
+}
+
+export interface UsageOut {
+  totals: {
+    requests: number;
+    tokens_in: number;
+    tokens_out: number;
+    avg_latency_ms: number;
+    gpu_hours: number;
+  };
+  rows: UsageRow[];
+  limits: {
+    token_limit: number | null;
+    request_limit: number | null;
+    requests_used: number;
+    tokens_used: number;
+  } | null;
 }

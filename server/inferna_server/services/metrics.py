@@ -40,6 +40,14 @@ inferna_tokens = PrometheusCounter(
     "inferna_tokens", "Tokens served by kind", ["model", "kind"]  # kind: prompt | completion
 )  # exposed as `inferna_tokens_total`
 
+# Usage accounting outcomes. Reconciles against `inferna_requests_total`: the number of
+# `usage_records` rows/requests should track gateway requests within the same window
+# (`scripts/usage-reconcile.sh` checks this).
+# outcomes: ok | no_usage_chunk | client_disconnect | upstream_error | quota_rejected | dropped
+inferna_usage_events_total = PrometheusCounter(
+    "inferna_usage_events", "Gateway requests accounted for usage", ["model", "outcome"]
+)  # exposed as `inferna_usage_events_total`
+
 # Gateway-maintained live counter (set under the gateway's _active_lock on
 # every request acquire/release). Deliberately NOT in _ALL_GAUGES:
 inferna_instance_active_requests = Gauge(

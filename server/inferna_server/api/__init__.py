@@ -29,6 +29,9 @@ from inferna_server.api import (
     models as models_api,
 )
 from inferna_server.api import (
+    usage as usage_api,
+)
+from inferna_server.api import (
     users as users_api,
 )
 from inferna_server.api import (
@@ -45,4 +48,5 @@ api_router.include_router(models_api.router)
 api_router.include_router(instances_api.router)
 api_router.include_router(deployments_api.router)
 api_router.include_router(dashboard_api.router)
+api_router.include_router(usage_api.router)
 api_router.include_router(compatibility_api.router)
