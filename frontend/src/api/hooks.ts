@@ -97,6 +97,33 @@ export function useModel(id: string) {
   });
 }
 
+export interface ModelCreateBody {
+  hf_repo_id: string;
+  display_name?: string | null;
+  category: ModelInfo["category"];
+  vram_required_mb: number;
+  requires_hf_token: boolean;
+  license?: string | null;
+  description?: string | null;
+}
+
+export function useCreateModel() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: ModelCreateBody) =>
+      api<ModelInfo>("/models", { method: "POST", body: JSON.stringify(body) }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["models"] }),
+  });
+}
+
+export function useDeleteModel() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api<void>(`/models/${id}`, { method: "DELETE" }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["models"] }),
+  });
+}
+
 export function useInstances() {
   return useQuery({
     queryKey: ["instances"],

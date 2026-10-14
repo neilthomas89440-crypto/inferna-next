@@ -376,6 +376,35 @@ paths:
                 title: Response List Models Api V1 Models Get
       security:
       - OAuth2PasswordBearer: []
+    post:
+      tags:
+      - models
+      summary: Create Model
+      description: "Add a Hugging Face repository to the catalog.\n\n`seed_catalog`\
+        \ upserts builtin entries by name on every start, so a custom model must not\n\
+        reuse a builtin name \u2014 it would be silently overwritten on the next boot."
+      operationId: create_model_api_v1_models_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ModelCreate'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      security:
+      - OAuth2PasswordBearer: []
   /api/v1/models/{model_id}:
     get:
       tags:
@@ -399,6 +428,30 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ModelOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    delete:
+      tags:
+      - models
+      summary: Delete Model
+      operationId: delete_model_api_v1_models__model_id__delete
+      security:
+      - OAuth2PasswordBearer: []
+      parameters:
+      - name: model_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Model Id
+      responses:
+        '204':
+          description: Successful Response
         '422':
           description: Validation Error
           content:
@@ -1416,6 +1469,57 @@ components:
       - worker_id
       - gpu_indexes
       title: ManualGpuSelection
+    ModelCreate:
+      properties:
+        hf_repo_id:
+          type: string
+          maxLength: 255
+          minLength: 3
+          title: Hf Repo Id
+        display_name:
+          anyOf:
+          - type: string
+            maxLength: 255
+          - type: 'null'
+          title: Display Name
+        category:
+          type: string
+          enum:
+          - llm
+          - embedding
+          - reranker
+          - audio
+          - multimodal
+          title: Category
+        vram_required_mb:
+          type: integer
+          maximum: 1000000.0
+          minimum: 256.0
+          title: Vram Required Mb
+        requires_hf_token:
+          type: boolean
+          title: Requires Hf Token
+          default: false
+        license:
+          anyOf:
+          - type: string
+            maxLength: 64
+          - type: 'null'
+          title: License
+        description:
+          anyOf:
+          - type: string
+            maxLength: 500
+          - type: 'null'
+          title: Description
+      type: object
+      required:
+      - hf_repo_id
+      - category
+      - vram_required_mb
+      title: ModelCreate
+      description: A user-added Hugging Face repository. Engines are derived server-side
+        from the category.
     ModelOut:
       properties:
         id:

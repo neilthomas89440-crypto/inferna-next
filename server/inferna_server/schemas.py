@@ -152,6 +152,18 @@ class ModelOut(ORMModel):
     supported_engines: list[str] = []
 
 
+class ModelCreate(BaseModel):
+    """A user-added Hugging Face repository. Engines are derived server-side from the category."""
+
+    hf_repo_id: str = Field(min_length=3, max_length=255)
+    display_name: str | None = Field(default=None, max_length=255)
+    category: Literal["llm", "embedding", "reranker", "audio", "multimodal"]
+    vram_required_mb: int = Field(ge=256, le=1_000_000)
+    requires_hf_token: bool = False
+    license: str | None = Field(default=None, max_length=64)
+    description: str | None = Field(default=None, max_length=500)
+
+
 # --- instances ---
 
 
