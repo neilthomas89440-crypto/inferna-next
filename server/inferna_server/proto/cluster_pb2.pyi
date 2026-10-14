@@ -82,8 +82,38 @@ class InstanceStatus(_message.Message):
     log_tail: str
     def __init__(self, instance_id: _Optional[str] = ..., state: _Optional[str] = ..., detail: _Optional[str] = ..., port: _Optional[int] = ..., generation: _Optional[int] = ..., log_tail: _Optional[str] = ...) -> None: ...
 
+class Parallelism(_message.Message):
+    __slots__ = ("mode", "tensor_parallel", "pipeline_parallel", "world_size")
+    MODE_FIELD_NUMBER: _ClassVar[int]
+    TENSOR_PARALLEL_FIELD_NUMBER: _ClassVar[int]
+    PIPELINE_PARALLEL_FIELD_NUMBER: _ClassVar[int]
+    WORLD_SIZE_FIELD_NUMBER: _ClassVar[int]
+    mode: str
+    tensor_parallel: int
+    pipeline_parallel: int
+    world_size: int
+    def __init__(self, mode: _Optional[str] = ..., tensor_parallel: _Optional[int] = ..., pipeline_parallel: _Optional[int] = ..., world_size: _Optional[int] = ...) -> None: ...
+
+class Rendezvous(_message.Message):
+    __slots__ = ("master_address", "master_port", "job_id", "node_rank", "num_nodes", "peers", "env")
+    MASTER_ADDRESS_FIELD_NUMBER: _ClassVar[int]
+    MASTER_PORT_FIELD_NUMBER: _ClassVar[int]
+    JOB_ID_FIELD_NUMBER: _ClassVar[int]
+    NODE_RANK_FIELD_NUMBER: _ClassVar[int]
+    NUM_NODES_FIELD_NUMBER: _ClassVar[int]
+    PEERS_FIELD_NUMBER: _ClassVar[int]
+    ENV_FIELD_NUMBER: _ClassVar[int]
+    master_address: str
+    master_port: int
+    job_id: int
+    node_rank: int
+    num_nodes: int
+    peers: _containers.RepeatedScalarFieldContainer[str]
+    env: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, master_address: _Optional[str] = ..., master_port: _Optional[int] = ..., job_id: _Optional[int] = ..., node_rank: _Optional[int] = ..., num_nodes: _Optional[int] = ..., peers: _Optional[_Iterable[str]] = ..., env: _Optional[_Iterable[str]] = ...) -> None: ...
+
 class EngineConfig(_message.Message):
-    __slots__ = ("engine", "model_name", "profile", "gpu_indexes", "vram_required_mb", "port", "requires_hf_token")
+    __slots__ = ("engine", "model_name", "profile", "gpu_indexes", "vram_required_mb", "port", "requires_hf_token", "parallelism", "rendezvous", "env")
     ENGINE_FIELD_NUMBER: _ClassVar[int]
     MODEL_NAME_FIELD_NUMBER: _ClassVar[int]
     PROFILE_FIELD_NUMBER: _ClassVar[int]
@@ -91,6 +121,9 @@ class EngineConfig(_message.Message):
     VRAM_REQUIRED_MB_FIELD_NUMBER: _ClassVar[int]
     PORT_FIELD_NUMBER: _ClassVar[int]
     REQUIRES_HF_TOKEN_FIELD_NUMBER: _ClassVar[int]
+    PARALLELISM_FIELD_NUMBER: _ClassVar[int]
+    RENDEZVOUS_FIELD_NUMBER: _ClassVar[int]
+    ENV_FIELD_NUMBER: _ClassVar[int]
     engine: str
     model_name: str
     profile: str
@@ -98,7 +131,10 @@ class EngineConfig(_message.Message):
     vram_required_mb: int
     port: int
     requires_hf_token: bool
-    def __init__(self, engine: _Optional[str] = ..., model_name: _Optional[str] = ..., profile: _Optional[str] = ..., gpu_indexes: _Optional[_Iterable[int]] = ..., vram_required_mb: _Optional[int] = ..., port: _Optional[int] = ..., requires_hf_token: _Optional[bool] = ...) -> None: ...
+    parallelism: Parallelism
+    rendezvous: Rendezvous
+    env: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, engine: _Optional[str] = ..., model_name: _Optional[str] = ..., profile: _Optional[str] = ..., gpu_indexes: _Optional[_Iterable[int]] = ..., vram_required_mb: _Optional[int] = ..., port: _Optional[int] = ..., requires_hf_token: _Optional[bool] = ..., parallelism: _Optional[_Union[Parallelism, _Mapping]] = ..., rendezvous: _Optional[_Union[Rendezvous, _Mapping]] = ..., env: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class InstanceCommand(_message.Message):
     __slots__ = ("instance_id", "action", "config", "generation")

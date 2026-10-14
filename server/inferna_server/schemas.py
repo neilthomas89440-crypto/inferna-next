@@ -109,6 +109,11 @@ class InstanceOut(ORMModel):
     generation: int
     port: int | None
     error_detail: str | None
+    parallel_group_id: uuid.UUID | None = None
+    node_rank: int | None = None
+    world_size: int | None = None
+    parallel_mode: str | None = None
+    rendezvous: str | None = None
     created_at: datetime
     updated_at: datetime
     model: ModelOut | None = None
@@ -195,6 +200,8 @@ class DeploymentOut(ORMModel):
     profile: str
     min_replicas: int
     max_replicas: int
+    nodes_per_replica: int = 1
+    parallel_mode: str | None = None
     created_at: datetime
     model: ModelOut | None = None
     instances: list[InstanceOut] = []

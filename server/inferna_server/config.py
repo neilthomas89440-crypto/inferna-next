@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:5173,http://localhost:8080"
     instance_port_range_start: int = 8010
     instance_port_range_end: int = 8100
+    # Rendezvous ports for parallel groups (rank-to-rank NCCL/gloo traffic and the head's
+    # control socket). Kept apart from the instance range; see docs/network-matrix.md.
+    rendezvous_port_range_start: int = 8110
+    rendezvous_port_range_end: int = 8199
     gateway_connect_timeout: float = 5.0
     gateway_read_timeout: float = 300.0
     gateway_enabled: bool = True
@@ -65,6 +69,10 @@ class Settings(BaseSettings):
     @property
     def instance_port_range(self) -> range:
         return range(self.instance_port_range_start, self.instance_port_range_end + 1)
+
+    @property
+    def rendezvous_port_range(self) -> range:
+        return range(self.rendezvous_port_range_start, self.rendezvous_port_range_end + 1)
 
 
 @lru_cache

@@ -49,6 +49,23 @@ message InstanceStatus {
   string log_tail = 6;        // last log lines of the engine container; empty when unavailable
 }
 
+message Parallelism {
+  string mode = 1;            // "single" | "dp" | "pp" | "tp" | "pd"
+  int32 tensor_parallel = 2;  // per-node tensor shards
+  int32 pipeline_parallel = 3;
+  int32 world_size = 4;       // total ranks
+}
+
+message Rendezvous {
+  string master_address = 1;  // rank 0 host (worker.address, never a port)
+  int32 master_port = 2;      // from the rendezvous range
+  int64 job_id = 3;           // stable per parallel group
+  int32 node_rank = 4;        // 0 = head
+  int32 num_nodes = 5;
+  repeated string peers = 6;  // other ranks' addresses, for diagnostics
+  repeated string env = 7;    // MASTER_ADDR/MASTER_PORT/VLLM_HOST_IP/NCCL_* to inject verbatim
+}
+
 message EngineConfig {
   string engine = 1;          // "vllm" | "sglang"
   string model_name = 2;      // huggingface id
@@ -57,6 +74,9 @@ message EngineConfig {
   uint64 vram_required_mb = 5;
   int32 port = 6;             // host port allocated by server
   bool requires_hf_token = 7; // worker must have INFERNA_HF_TOKEN set
+  Parallelism parallelism = 8;      // absent => single-node (byte-identical to the old contract)
+  Rendezvous rendezvous = 9;        // set for every rank of a parallel group, including rank 0
+  repeated string env = 10;         // extra environment for the container (network interface, …)
 }
 message InstanceCommand {
   string instance_id = 1;

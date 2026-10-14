@@ -1333,6 +1333,15 @@ components:
         max_replicas:
           type: integer
           title: Max Replicas
+        nodes_per_replica:
+          type: integer
+          title: Nodes Per Replica
+          default: 1
+        parallel_mode:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Parallel Mode
         created_at:
           type: string
           format: date-time
@@ -1491,6 +1500,32 @@ components:
           - type: string
           - type: 'null'
           title: Error Detail
+        parallel_group_id:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: Parallel Group Id
+        node_rank:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Node Rank
+        world_size:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: World Size
+        parallel_mode:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Parallel Mode
+        rendezvous:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Rendezvous
         created_at:
           type: string
           format: date-time
