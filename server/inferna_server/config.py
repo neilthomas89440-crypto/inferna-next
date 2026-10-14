@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     gateway_connect_timeout: float = 5.0
     gateway_read_timeout: float = 300.0
     gateway_enabled: bool = True
+    # Ask OpenAI-compatible upstreams for a final usage chunk on streamed responses
+    # (token accounting degrades to request-only counting when disabled or unsupported).
+    gateway_inject_stream_usage: bool = True
     gateway_upstream_allowlist: str = ""
     log_level: str = "info"
     @model_validator(mode="after")

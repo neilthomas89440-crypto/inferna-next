@@ -3,8 +3,10 @@ import {
   useChangePassword,
   useCreateUser,
   useDeleteUser,
+  useSetUserLimits,
   useUsers,
 } from "../api/hooks";
+import type { User } from "../api/types";
 import { useAuth } from "../context/AuthContext";
 import ConfirmDialog from "../components/ConfirmDialog";
 
@@ -14,6 +16,7 @@ export default function UsersPage() {
   const createUser = useCreateUser();
   const deleteUser = useDeleteUser();
   const changePassword = useChangePassword();
+  const setLimits = useSetUserLimits();
 
   const [creating, setCreating] = useState(false);
   const [username, setUsername] = useState("");
@@ -23,6 +26,9 @@ export default function UsersPage() {
   const [deleting, setDeleting] = useState<string | null>(null);
   const [resetting, setResetting] = useState<string | null>(null);
   const [newPassword, setNewPassword] = useState("");
+  const [editingLimits, setEditingLimits] = useState<User | null>(null);
+  const [requestLimit, setRequestLimit] = useState("");
+  const [tokenLimit, setTokenLimit] = useState("");
 
   if (user?.role !== "admin") {
     return (
@@ -43,6 +49,29 @@ export default function UsersPage() {
       setCreating(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Create failed");
+    }
+  };
+
+  const openLimits = (target: User) => {
+    setError(null);
+    setEditingLimits(target);
+    setRequestLimit(target.request_limit === null ? "" : String(target.request_limit));
+    setTokenLimit(target.token_limit === null ? "" : String(target.token_limit));
+  };
+
+  const submitLimits = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!editingLimits) return;
+    setError(null);
+    try {
+      await setLimits.mutateAsync({
+        id: editingLimits.id,
+        request_limit: requestLimit === "" ? null : Number(requestLimit),
+        token_limit: tokenLimit === "" ? null : Number(tokenLimit),
+      });
+      setEditingLimits(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save limits");
     }
   };
 
@@ -82,6 +111,7 @@ export default function UsersPage() {
               <th className="px-4 py-2">Username</th>
               <th className="px-4 py-2">Role</th>
               <th className="px-4 py-2">Active</th>
+              <th className="px-4 py-2">Daily limits</th>
               <th className="px-4 py-2 text-right">Actions</th>
             </tr>
           </thead>
@@ -91,7 +121,19 @@ export default function UsersPage() {
                 <td className="px-4 py-2 font-medium text-slate-700">{u.username}</td>
                 <td className="px-4 py-2 text-slate-600">{u.role}</td>
                 <td className="px-4 py-2 text-slate-600">{u.is_active ? "yes" : "no"}</td>
+                <td className="px-4 py-2 text-slate-600" data-testid={`limits-${u.username}`}>
+                  {u.request_limit === null && u.token_limit === null
+                    ? "—"
+                    : `${u.request_limit ?? "∞"} req / ${u.token_limit ?? "∞"} tok`}
+                </td>
                 <td className="px-4 py-2 text-right">
+                  <button
+                    type="button"
+                    onClick={() => openLimits(u)}
+                    className="mr-3 text-sm text-slate-600 hover:underline"
+                  >
+                    Limits
+                  </button>
                   <button
                     type="button"
                     onClick={() => setResetting(u.id)}
@@ -198,6 +240,62 @@ export default function UsersPage() {
                 <button
                   type="submit"
                   disabled={changePassword.isPending}
+                  className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+                >
+                  Save
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {editingLimits && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
+          <div className="w-full max-w-md rounded-lg bg-white p-6 shadow-xl">
+            <h2 className="text-lg font-semibold text-slate-800">
+              Daily limits — {editingLimits.username}
+            </h2>
+            <p className="mt-1 text-sm text-slate-500">
+              Soft per-UTC-day limits applied by the gateway. Leave a field empty for no limit.
+            </p>
+            <form onSubmit={submitLimits} className="mt-4 space-y-4">
+              {error && (
+                <div className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>
+              )}
+              <label className="block text-sm">
+                <span className="font-medium text-slate-700">Requests per day</span>
+                <input
+                  type="number"
+                  min={0}
+                  value={requestLimit}
+                  onChange={(e) => setRequestLimit(e.target.value)}
+                  placeholder="no limit"
+                  className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2"
+                />
+              </label>
+              <label className="block text-sm">
+                <span className="font-medium text-slate-700">Tokens per day</span>
+                <input
+                  type="number"
+                  min={0}
+                  value={tokenLimit}
+                  onChange={(e) => setTokenLimit(e.target.value)}
+                  placeholder="no limit"
+                  className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2"
+                />
+              </label>
+              <div className="flex justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => setEditingLimits(null)}
+                  className="rounded-md border border-slate-300 px-4 py-2 text-sm text-slate-600 hover:bg-slate-100"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={setLimits.isPending}
                   className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
                 >
                   Save

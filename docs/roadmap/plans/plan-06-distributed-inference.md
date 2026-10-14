@@ -394,10 +394,10 @@ rank 0 с endpoint, rank 1 без).
 ## M8 — Экономика и упругость (волна G)
 
 - `w4/usage-metering` — `plan-05-usage-metering.md` целиком (UsageRecord, event из gateway,
-  агрегатор, `/api/v1/usage`, UI-страница, Grafana, квоты, `scripts/usage-reconcile.sh`), плюс
+  агрегатор, `/api/v1/usage`, UI-страница, Grafana, квоты, `scripts/usage-reconcile.py`), плюс
   M8-требование: агрегаты разбиваются и по **ключу**, и по пользователю, и по модели (в плане 05
   это `api_key_id` в `UsageRecord`). Квоты и агрегатор уже доставлены в волне A планом 05 — в этой
-  ветке остаются сверка с gateway-метриками (`scripts/usage-reconcile.sh` в CI/на расписании) и
+  ветке остаются сверка с gateway-метриками (`scripts/usage-reconcile.py` в CI/на расписании) и
   любые расхождения, найденные на multi-node стенде.
 - `w4/autoscaling` — `plan-02-release-b-autoscaling.md` §6: масштабирование **только целыми
   параллельными группами**; отдельный ранг не является единицей масштабирования.
@@ -405,7 +405,7 @@ rank 0 с endpoint, rank 1 без).
   5-я задачи lifespan).
 
 Гейт M8: агрегаты сверяются с `inferna_requests_total`/`inferna_tokens_total`
-(`scripts/usage-reconcile.sh`, расхождение в допуске); политика проходит replay и не создаёт
+(`scripts/usage-reconcile.py`, расхождение в допуске); политика проходит replay и не создаёт
 осцилляций; scale-out не оставляет «половин» групп.
 
 ---

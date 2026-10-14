@@ -31,6 +31,7 @@ from inferna_server.models import (
     ApiKey,
     Model,
     ModelInstance,
+    as_aware_utc,
     utcnow,
 )
 from inferna_server.services.metrics import (
@@ -38,11 +39,18 @@ from inferna_server.services.metrics import (
     inferna_requests,
     inferna_time_to_first_byte_seconds,
     inferna_tokens,
+    inferna_usage_events_total,
 )
 from inferna_server.services.upstream_guard import (
     _extract_host,
     hostname_in_allowlist,
     resolve_and_validate,
+)
+from inferna_server.services.usage import (
+    UsageContext,
+    check_quota,
+    monotonic_ms,
+    record_request,
 )
 from inferna_server.services.workers_svc import sha256_hex
 
@@ -162,7 +170,7 @@ async def get_api_key(
         )
     # Best-effort usage stamp: at most once per minute, never on the per-request hot path.
     if key.last_used_at is None or (
-        utcnow() - key.last_used_at
+        utcnow() - as_aware_utc(key.last_used_at)
     ).total_seconds() >= LAST_USED_UPDATE_SECONDS:
         now = utcnow()
         key.last_used_at = now
@@ -492,24 +500,53 @@ def get_gateway_client(app: FastAPI) -> httpx.AsyncClient:
     return client
 
 
-def _record_usage(model_name: str, tail: list[str]) -> None:
-    """Best-effort usage extraction from the tail of a streamed chat completion."""
+def _record_usage(model_name: str, tail: list[str]) -> tuple[int, int] | None:
+    """Best-effort usage extraction from the tail of a streamed chat completion.
+
+    Returns `(prompt_tokens, completion_tokens)` when the upstream sent a usage block,
+    otherwise None (the request is still counted, just without token numbers).
+    """
     text = "".join(tail)
     match = _USAGE_RE.search(text)
     if match is None:
-        return
+        return None
     prompt = _PROMPT_TOKENS_RE.search(match.group(0))
     completion = _COMPLETION_TOKENS_RE.search(match.group(0))
+    prompt_tokens = int(prompt.group(1)) if prompt is not None else 0
+    completion_tokens = int(completion.group(1)) if completion is not None else 0
     if prompt is not None:
-        inferna_tokens.labels(model_name, "prompt").inc(int(prompt.group(1)))
+        inferna_tokens.labels(model_name, "prompt").inc(prompt_tokens)
     if completion is not None:
-        inferna_tokens.labels(model_name, "completion").inc(int(completion.group(1)))
+        inferna_tokens.labels(model_name, "completion").inc(completion_tokens)
+    if prompt is None and completion is None:
+        return None
+    return prompt_tokens, completion_tokens
 
 
-async def _relay(resp: httpx.Response, model_name: str, path: str) -> AsyncIterator[bytes]:
+def _with_stream_usage(raw_body: bytes) -> bytes:
+    """Add `stream_options.include_usage` so streamed responses carry a usage chunk.
+
+    Keeps a client-supplied `stream_options` untouched; returns the body unchanged when it
+    is not a JSON object.
+    """
+    try:
+        payload = json.loads(raw_body)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return raw_body
+    if not isinstance(payload, dict) or payload.get("stream_options"):
+        return raw_body
+    payload["stream_options"] = {"include_usage": True}
+    return json.dumps(payload).encode()
+
+
+async def _relay(
+    resp: httpx.Response, model_name: str, path: str, ctx: UsageContext
+) -> AsyncIterator[bytes]:
     # Tail buffer for usage extraction (chat + embeddings); bytes always yielded first.
     # Audio transcription responses carry no usage from OpenAI upstreams.
     tail: list[str] = []
+    outcome = "ok"
+    completed = False
     try:
         async for chunk in resp.aiter_bytes():
             if path in ("/v1/chat/completions", "/v1/embeddings"):
@@ -517,11 +554,26 @@ async def _relay(resp: httpx.Response, model_name: str, path: str) -> AsyncItera
                 while len(tail) > 8 or sum(len(c) for c in tail) > 16384:
                     tail.pop(0)
             yield chunk
-        _record_usage(model_name, tail)
+        completed = True
     except (httpx.TransportError, httpx.DecodingError) as exc:
         # Headers are already sent; the only option is logging and ending the stream.
+        outcome = "upstream_error"
         logger.warning("gateway upstream stream failed", model=model_name, error=str(exc))
+    except GeneratorExit:
+        # Client hung up mid-stream. Accounting happens in `finally` (this used to be lost).
+        outcome = "client_disconnect"
+        raise
     finally:
+        tokens = _record_usage(model_name, tail)
+        if completed and tokens is None:
+            outcome = "no_usage_chunk"
+        record_request(
+            ctx,
+            tokens_in=tokens[0] if tokens else 0,
+            tokens_out=tokens[1] if tokens else 0,
+            latency_ms=monotonic_ms(ctx.started),
+            outcome=outcome,
+        )
         await resp.aclose()
 
 
@@ -538,7 +590,7 @@ async def _release_instance(instance_id: uuid.UUID, model_name: str) -> None:
 
 
 async def _proxy(
-    request: Request, raw_body: bytes, model_name: str, db: AsyncSession
+    request: Request, raw_body: bytes, model_name: str, db: AsyncSession, *, key: ApiKey
 ) -> StreamingResponse:
     stream = False
     content_type = request.headers.get("content-type", "").lower()
@@ -555,7 +607,23 @@ async def _proxy(
 
     client = get_gateway_client(request.app)
     settings = get_settings()
+    if (
+        stream
+        and settings.gateway_inject_stream_usage
+        and request.url.path == "/v1/chat/completions"
+    ):
+        # Token accounting for streams needs a usage chunk; the client's own
+        # stream_options (if any) is preserved by _with_stream_usage.
+        raw_body = _with_stream_usage(raw_body)
     target, instance, model = await _resolve_target(db, model_name, request)
+    usage_ctx = UsageContext(
+        user_id=key.user_id,
+        api_key_id=key.id,
+        model_id=model.id,
+        model_name=model_name,
+        instance_id=instance.id,
+        started=time.monotonic(),
+    )
     # _resolve_target reserved the routing slot atomically with its selection
     # (one _active_lock section: select → stamp LRU → increment). From here on
     # the slot must be released exactly once on every path. The success path
@@ -565,6 +633,14 @@ async def _proxy(
     # Failures inside _resolve_target itself released the slot there.
     slot_handed_off = False
     try:
+        exceeded = await check_quota(db, key.user)
+        if exceeded is not None:
+            used, limit = exceeded
+            inferna_usage_events_total.labels(model_name, "quota_rejected").inc()
+            logger.info(
+                "gateway quota exceeded", model=model_name, used=used, limit=limit, user=key.user_id
+            )
+            raise OpenAIError(429, "usage quota exceeded", "insufficient_quota", "quota_exceeded")
         # Preserve the original hostname in the Host header for virtual hosting,
         # even though the connection target is now a pinned IP (prevents vhost mismatch).
         worker = instance.worker
@@ -596,6 +672,11 @@ async def _proxy(
             elapsed = time.monotonic() - started if started is not None else 0
             inferna_time_to_first_byte_seconds.labels(model_name).observe(elapsed)
             inferna_requests.labels(model=model_name, status="502").inc()
+            record_request(
+                usage_ctx,
+                latency_ms=monotonic_ms(usage_ctx.started),
+                outcome="upstream_error",
+            )
             logger.warning(
                 "gateway upstream unreachable", model=model_name, target=target, error=str(exc)
             )
@@ -604,7 +685,7 @@ async def _proxy(
         inferna_time_to_first_byte_seconds.labels(model_name).observe(time.monotonic() - started)  # type: ignore[arg-type]
         inferna_requests.labels(model=model_name, status=str(resp.status_code)).inc()
         response = StreamingResponse(
-            _relay(resp, model_name, request.url.path),
+            _relay(resp, model_name, request.url.path, usage_ctx),
             status_code=resp.status_code,
             media_type=resp.headers.get("content-type") or "application/json",
             # Releases the routing slot after the stream ends or the client
@@ -754,7 +835,7 @@ async def chat_completions(
 ):
     raw_body = await _read_body_limited(request, MAX_JSON_BODY_SIZE)
     model_name = await _extract_model(request, raw_body)
-    return await _proxy(request, raw_body, model_name, db)
+    return await _proxy(request, raw_body, model_name, db, key=key)
 
 
 @router.post(
@@ -769,7 +850,7 @@ async def embeddings(
 ):
     raw_body = await _read_body_limited(request, MAX_JSON_BODY_SIZE)
     model_name = await _extract_model(request, raw_body)
-    return await _proxy(request, raw_body, model_name, db)
+    return await _proxy(request, raw_body, model_name, db, key=key)
 
 
 @router.post(
@@ -784,7 +865,7 @@ async def audio_transcriptions(
 ):
     raw_body = await _read_body_limited(request, MAX_BODY_SIZE)
     model_name = await _extract_model(request, raw_body)
-    return await _proxy(request, raw_body, model_name, db)
+    return await _proxy(request, raw_body, model_name, db, key=key)
 
 
 @router.get("/models", responses=_LIST_MODELS_RESPONSES)  # type: ignore[arg-type]

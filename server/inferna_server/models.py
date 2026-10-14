@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from sqlalchemy import (
     JSON,
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -28,6 +30,15 @@ LIVE_STATES = ("scheduled", "starting", "running")
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def as_aware_utc(value: datetime) -> datetime:
+    """Return `value` with UTC tzinfo attached.
+
+    SQLite (the dev/test default) drops tzinfo on `DateTime(timezone=True)` columns, so a
+    row read back is naive while `utcnow()` is aware — comparing them raises TypeError.
+    """
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
 
 
 class TimestampMixin:
@@ -49,6 +60,9 @@ class User(Base, TimestampMixin):
     password_hash: Mapped[str] = mapped_column(String(128))
     role: Mapped[str] = mapped_column(String(16), default="user")  # "admin" | "user"
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Soft per-day gateway limits; None means "no limit".
+    token_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    request_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class Cluster(Base):
@@ -260,3 +274,64 @@ class ModelInstance(Base, TimestampMixin):
     cluster: Mapped[Cluster] = relationship()
     worker: Mapped[Worker | None] = relationship(back_populates="instances")
     deployment: Mapped[Deployment] = relationship(back_populates="instances")
+
+
+class UsageRecord(Base, TimestampMixin):
+    """Daily per-user/per-key/per-model gateway usage, folded from request events.
+
+    One row per UTC day and (user, key, model): the gateway buffers request aggregates in
+    memory and the flusher upserts them, so the table stays bounded regardless of traffic.
+    """
+
+    __tablename__ = "usage_records"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id", "api_key_id", "model_id", "period_start", name="uq_usage_records_period"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    api_key_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("api_keys.id", ondelete="CASCADE"), index=True
+    )
+    model_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("models.id", ondelete="CASCADE"), index=True
+    )
+    period_start: Mapped[date] = mapped_column(Date, index=True)
+    requests: Mapped[int] = mapped_column(Integer, default=0)  # counted even without usage data
+    tokens_in: Mapped[int] = mapped_column(Integer, default=0)
+    tokens_out: Mapped[int] = mapped_column(Integer, default=0)
+    latency_ms_sum: Mapped[int] = mapped_column(Integer, default=0)  # avg = sum / requests
+
+    model: Mapped[Model] = relationship()
+    user: Mapped[User] = relationship()
+    api_key: Mapped[ApiKey] = relationship()
+
+
+class GpuUsageRecord(Base, TimestampMixin):
+    """GPU-seconds occupied per (model, cluster, day), sampled from live instances.
+
+    `Deployment` has no owner column, so GPU-hours cannot honestly be attributed to a user;
+    model + cluster is the finest attribution the schema supports today.
+    """
+
+    __tablename__ = "gpu_usage_records"
+    __table_args__ = (
+        UniqueConstraint("model_id", "cluster_id", "period_start", name="uq_gpu_usage_period"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    model_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("models.id", ondelete="CASCADE"), index=True
+    )
+    cluster_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("clusters.id", ondelete="CASCADE"), index=True
+    )
+    period_start: Mapped[date] = mapped_column(Date, index=True)
+    gpu_seconds: Mapped[float] = mapped_column(Float, default=0.0)
+
+    model: Mapped[Model] = relationship()
+    cluster: Mapped[Cluster] = relationship()

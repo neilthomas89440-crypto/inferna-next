@@ -9,6 +9,7 @@ import InstancesPage from "./pages/InstancesPage";
 import LoginPage from "./pages/LoginPage";
 import ModelDetailPage from "./pages/ModelDetailPage";
 import ModelsPage from "./pages/ModelsPage";
+import UsagePage from "./pages/UsagePage";
 import UsersPage from "./pages/UsersPage";
 
 export default function App() {
@@ -40,6 +41,7 @@ export default function App() {
         <Route path="/models" element={<ModelsPage />} />
         <Route path="/models/:modelId" element={<ModelDetailPage />} />
         <Route path="/instances" element={<InstancesPage />} />
+        <Route path="/usage" element={<UsagePage />} />
         <Route path="/keys" element={<ApiKeysPage />} />
         <Route path="/users" element={<UsersPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
