@@ -26,6 +26,14 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     """Downgrade schema."""
-    with op.batch_alter_table('users', recreate='always') as batch_op:
-        batch_op.drop_column('request_limit')
-        batch_op.drop_column('token_limit')
+    conn = op.get_bind()
+    if conn.dialect.name == 'sqlite':
+        # SQLite cannot drop a column in place; the batch copy-and-move rebuilds the table.
+        with op.batch_alter_table('users', recreate='always') as batch_op:
+            batch_op.drop_column('request_limit')
+            batch_op.drop_column('token_limit')
+    else:
+        # A batch rebuild on PostgreSQL drops and recreates the primary key, which fails while
+        # foreign keys (usage_records, api_keys, …) still reference `users`.
+        op.drop_column('users', 'request_limit')
+        op.drop_column('users', 'token_limit')
