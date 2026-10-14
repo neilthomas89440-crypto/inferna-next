@@ -70,8 +70,11 @@ class FakeUpstream:
                 "choices": [{"index": 0, "delta": {"content": f"token{index} "}}],
             }
             await send(
-                {"type": "http.response.body", "body": f"data: {json.dumps(chunk)}\n\n".encode(),
-                 "more_body": True}
+                {
+                    "type": "http.response.body",
+                    "body": f"data: {json.dumps(chunk)}\n\n".encode(),
+                    "more_body": True,
+                }
             )
             await asyncio.sleep(self.delay)
         usage = {
@@ -82,8 +85,11 @@ class FakeUpstream:
             "usage": {"prompt_tokens": 16, "completion_tokens": chunks},
         }
         await send(
-            {"type": "http.response.body", "body": f"data: {json.dumps(usage)}\n\n".encode(),
-             "more_body": True}
+            {
+                "type": "http.response.body",
+                "body": f"data: {json.dumps(usage)}\n\n".encode(),
+                "more_body": True,
+            }
         )
         await send({"type": "http.response.body", "body": b"data: [DONE]\n\n", "more_body": False})
 

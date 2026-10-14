@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 import httpx
+
 from bench.client import chat
 
 CHUNK_1 = {"choices": [{"delta": {"content": "Hel"}}]}

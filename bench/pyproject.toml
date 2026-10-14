@@ -32,6 +32,11 @@ ignore = ["B008", "UP017"]
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["E501"]
 
+# `bench` is this project's own package; without an explicit first-party list ruff classifies it
+# from the environment, which made the import-sorting check flip between runs (and fail in CI).
+[tool.ruff.lint.isort]
+known-first-party = ["bench"]
+
 [tool.pyright]
 pythonVersion = "3.12"
 venvPath = "."
