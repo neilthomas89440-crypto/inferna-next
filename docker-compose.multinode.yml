@@ -1,0 +1,81 @@
+# Three workers on one machine — the M3 topology for multi-node experiments.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.mock.yml \
+#                  -f docker-compose.multinode.yml up -d --build
+#
+# Why an overlay with three services instead of a replica count: every worker needs a distinct
+# identity and a disjoint port range. The server keys workers by `hostname` and by `name`
+# (`services/workers_svc.register_worker`), and a parallel group places one rank per host — so
+# without these three values collapsed into one worker or two ranks would fight over `8010`.
+services:
+  worker:
+    # The base stack's single worker is replaced by the three below.
+    deploy:
+      replicas: 0
+    profiles: ["disabled"]
+
+  worker-a:
+    build: ./worker
+    environment: &worker-env
+      INFERNA_ENV: ${INFERNA_ENV:-development}
+      INFERNA_SERVER_URL: server:9091
+      INFERNA_REGISTRATION_TOKEN: ${INFERNA_REGISTRATION_TOKEN:-inferna-registration-token}
+      INFERNA_MODELS_DIR: /models
+      INFERNA_HF_TOKEN: ${INFERNA_HF_TOKEN:-}
+      INFERNA_MOCK_ENGINE: ${INFERNA_MOCK_ENGINE:-}
+      # Identity: hostname is what the server keys registrations by.
+      INFERNA_WORKER_HOSTNAME: node-a
+      INFERNA_WORKER_NAME: node-a
+      # The head of a group must be reachable by the other ranks: the host gateway is the one
+      # address every container can dial on a single-machine stack.
+      INFERNA_WORKER_ADDRESS: host.docker.internal
+      # Disjoint instance-port ranges: rank 0 of a group binds a host port from here.
+      INFERNA_INSTANCE_PORT_RANGE_START: "8010"
+      INFERNA_INSTANCE_PORT_RANGE_END: "8039"
+      INFERNA_RENDEZVOUS_PORT_RANGE_START: "8110"
+      INFERNA_RENDEZVOUS_PORT_RANGE_END: "8139"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - inferna-models-a:/models
+    depends_on:
+      server:
+        condition: service_healthy
+
+  worker-b:
+    build: ./worker
+    environment:
+      <<: *worker-env
+      INFERNA_WORKER_HOSTNAME: node-b
+      INFERNA_WORKER_NAME: node-b
+      INFERNA_INSTANCE_PORT_RANGE_START: "8040"
+      INFERNA_INSTANCE_PORT_RANGE_END: "8069"
+      INFERNA_RENDEZVOUS_PORT_RANGE_START: "8140"
+      INFERNA_RENDEZVOUS_PORT_RANGE_END: "8169"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - inferna-models-b:/models
+    depends_on:
+      server:
+        condition: service_healthy
+
+  worker-c:
+    build: ./worker
+    environment:
+      <<: *worker-env
+      INFERNA_WORKER_HOSTNAME: node-c
+      INFERNA_WORKER_NAME: node-c
+      INFERNA_INSTANCE_PORT_RANGE_START: "8070"
+      INFERNA_INSTANCE_PORT_RANGE_END: "8099"
+      INFERNA_RENDEZVOUS_PORT_RANGE_START: "8170"
+      INFERNA_RENDEZVOUS_PORT_RANGE_END: "8199"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - inferna-models-c:/models
+    depends_on:
+      server:
+        condition: service_healthy
+
+volumes:
+  inferna-models-a:
+  inferna-models-b:
+  inferna-models-c:
