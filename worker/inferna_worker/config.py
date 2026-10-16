@@ -26,6 +26,11 @@ class Settings(BaseSettings):
     # Identity the server keys workers by. Defaults to the machine name; override it to run
     # more than one worker process on one host (local multi-node stacks, tests).
     worker_hostname: str = Field(default_factory=platform.node)
+    # Multi-node followers have no API server: they count as ready once their container
+    # stays up this long.
+    mn_rank_ready_seconds: float = 20.0
+    # NIC NCCL uses for rank-to-rank traffic (multi-node containers run with host networking).
+    netif: str = "eth0"
     cluster_name: str = ""
     mock_engine: bool = False
     models_dir: str = "./models"
