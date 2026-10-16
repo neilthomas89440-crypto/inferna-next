@@ -27,6 +27,13 @@ class Settings(BaseSettings):
     admin_password: str = "inferna"
     registration_token: str = "inferna-registration-token"
     grpc_port: int = 9091
+    # gRPC transport security. Without these the worker channel is plaintext, which the README
+    # documents as a private-network assumption; set cert+key to terminate TLS, and a CA (plus
+    # require_client_cert) for mTLS.
+    grpc_tls_cert: str = ""
+    grpc_tls_key: str = ""
+    grpc_tls_ca: str = ""
+    grpc_tls_require_client_cert: bool = False
     cors_origins: str = "http://localhost:5173,http://localhost:8080"
     instance_port_range_start: int = 8010
     instance_port_range_end: int = 8100
@@ -50,6 +57,15 @@ class Settings(BaseSettings):
     gateway_inject_stream_usage: bool = True
     gateway_upstream_allowlist: str = ""
     log_level: str = "info"
+    @model_validator(mode="after")
+    def _check_tls_material(self):
+        """A certificate without its key is a startup error, not a later surprise."""
+        if bool(self.grpc_tls_cert) != bool(self.grpc_tls_key):
+            raise ValueError("INFERNA_GRPC_TLS_CERT and INFERNA_GRPC_TLS_KEY must be set together")
+        if self.grpc_tls_require_client_cert and not self.grpc_tls_ca:
+            raise ValueError("INFERNA_GRPC_TLS_REQUIRE_CLIENT_CERT needs INFERNA_GRPC_TLS_CA")
+        return self
+
     @model_validator(mode="after")
     def _check_production_secrets(self):
         if self.environment == "production":
@@ -77,6 +93,11 @@ class Settings(BaseSettings):
     @property
     def instance_port_range(self) -> range:
         return range(self.instance_port_range_start, self.instance_port_range_end + 1)
+
+    @property
+    def grpc_tls_enabled(self) -> bool:
+        """True when a certificate and key are configured (CA optional, required for mTLS)."""
+        return bool(self.grpc_tls_cert and self.grpc_tls_key)
 
     @property
     def rendezvous_port_range(self) -> range:

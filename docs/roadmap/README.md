@@ -138,6 +138,10 @@ TTFT/ITL/TPS в `/metrics`), M2.1 (замороженный контракт `pr
 живьём), M3 (порты/топология/netem — `docs/network-matrix.md`), M4 (одна команда воспроизводит
 вердикт паритета — `docs/multinode-parity.md`), M5 (маршрутизация по префикс-кэшу с метрикой
 `inferna_prefix_cache_hit_ratio`), M6 (детерминированный набор задач кодинга и CI-проверка харнесса —
-`docs/coding-validation.md`). Железные гейты (M2-железо, M4, M6,
+`docs/coding-validation.md`), M7 (диагностика по рангам, матрица сбоев + 24-часовой soak, UI
+параллельных групп), M8 (usage-сверка как CI-гейт, autoscaling по измеренной нагрузке с
+масштабированием целыми группами). M9: TLS/mTLS на gRPC и тесты версионного гейта сделаны; железные
+пункты (engine-matrix, phase0-validation, прогоны parity/coding на железе) и тег `v1.0` остаются
+за `BLOCKED: no GPU hosts` — см. `docs/roadmap/plans/evidence-w5-release-hardening.md`. Железные гейты (M2-железо, M4, M6,
 M9) помечены в evidence как `BLOCKED: no GPU hosts` и закрываются на первом реальном стенде.
 

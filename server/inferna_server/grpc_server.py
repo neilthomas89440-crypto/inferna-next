@@ -49,15 +49,59 @@ async def disconnect_watchdog() -> None:
             logger.exception("disconnect watchdog iteration failed")
 
 
+def _grpc_credentials(settings) -> grpc.ServerCredentials | None:
+    """Server credentials from the configured files, or None for plaintext.
+
+    Raising here (rather than at the first Register) turns a misconfigured certificate into a
+    startup failure, which is the only moment an operator can act on it cheaply.
+    """
+    if not settings.grpc_tls_enabled:
+        if settings.environment == "production":
+            logger.warning(
+                "gRPC is plaintext",
+                port=settings.grpc_port,
+                hint=(
+                    "set INFERNA_GRPC_TLS_CERT/KEY (and CA for mTLS), "
+                    "or keep 9091 on a private network"
+                ),
+            )
+        return None
+    try:
+        with open(settings.grpc_tls_key, "rb") as key_file:
+            private_key = key_file.read()
+        with open(settings.grpc_tls_cert, "rb") as cert_file:
+            certificate_chain = cert_file.read()
+        root_certificates = None
+        if settings.grpc_tls_ca:
+            with open(settings.grpc_tls_ca, "rb") as ca_file:
+                root_certificates = ca_file.read()
+    except OSError as exc:
+        raise RuntimeError(f"cannot read the gRPC TLS material: {exc}") from exc
+    return grpc.ssl_server_credentials(
+        [(private_key, certificate_chain)],
+        root_certificates=root_certificates,
+        require_client_auth=settings.grpc_tls_require_client_cert,
+    )
+
+
 async def serve_grpc(app=None) -> None:
     settings = get_settings()
     server = grpc.aio.server()
     cluster_pb2_grpc.add_WorkerServiceServicer_to_server(WorkerService(), server)
-    server.add_insecure_port(f"[::]:{settings.grpc_port}")
+    credentials = _grpc_credentials(settings)
+    if credentials is None:
+        server.add_insecure_port(f"[::]:{settings.grpc_port}")
+    else:
+        server.add_secure_port(f"[::]:{settings.grpc_port}", credentials)
     await server.start()
     if app is not None:
         app.state.grpc_ready = True
-    logger.info("gRPC server started", port=settings.grpc_port)
+    logger.info(
+        "gRPC server started",
+        port=settings.grpc_port,
+        tls=credentials is not None,
+        mutual=settings.grpc_tls_require_client_cert and credentials is not None,
+    )
     watchdog = asyncio.create_task(disconnect_watchdog())
     if app is not None:
         app.state.watchdog = watchdog
