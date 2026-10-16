@@ -61,6 +61,22 @@ inferna_output_tps = Histogram(
     buckets=(1, 5, 10, 20, 30, 50, 75, 100, 200, 500),
 )
 
+inferna_autoscale_actions_total = PrometheusCounter(
+    "inferna_autoscale_actions",
+    "Autoscaling decisions by outcome",
+    ["deployment", "action"],  # action: up | down | none | failed
+)
+inferna_autoscale_target_replicas = Gauge(
+    "inferna_autoscale_target_replicas",
+    "Replica count the autoscaler last moved a deployment to",
+    ["deployment"],
+)
+inferna_autoscale_signal_ratio = Gauge(
+    "inferna_autoscale_signal_ratio",
+    "Measured signal over its target (1.0 = at the target)",
+    ["deployment", "signal"],  # signal: ttft | queue
+)
+
 inferna_prefix_cache_hit_ratio = Gauge(
     "inferna_prefix_cache_hit_ratio",
     "Share of gateway requests whose prompt prefix matched a replica's resident prefix",

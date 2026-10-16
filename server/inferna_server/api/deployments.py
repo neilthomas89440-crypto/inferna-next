@@ -14,7 +14,7 @@ from inferna_server.api.instances import _with_names
 from inferna_server.auth import get_current_user
 from inferna_server.db import get_db
 from inferna_server.models import Deployment, ModelInstance, User
-from inferna_server.schemas import DeploymentOut, ScaleRequest
+from inferna_server.schemas import DeploymentOut, DeploymentRange, ScaleRequest
 from inferna_server.services.scaling import apply_scale
 
 router = APIRouter(prefix="/deployments", tags=["deployments"])
@@ -69,6 +69,45 @@ async def scale_deployment(
     except NoResultFound:
         # The group was deleted between apply_scale's commit and this re-read.
         raise HTTPException(status_code=404, detail="deployment not found") from None
+    _with_names(list(refreshed.instances))
+    return refreshed
+
+
+@router.put("/{deployment_id}/range", response_model=DeploymentOut)
+async def set_deployment_range(
+    deployment_id: uuid.UUID,
+    body: DeploymentRange,
+    _: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> Deployment:
+    """Set the autoscaling window without pinning the replica count.
+
+    `POST /scale` means "exactly N" and pins min = max (Release A semantics, unchanged). A window
+    is the opposite request: the count is allowed to move between the bounds, and the current count
+    is only clamped into them here.
+    """
+    deployment = (
+        await db.execute(
+            select(Deployment).options(*_DEPLOYMENT_LOADS).where(Deployment.id == deployment_id)
+        )
+    ).scalar_one_or_none()
+    if deployment is None:
+        raise HTTPException(status_code=404, detail="deployment not found")
+
+    deployment.min_replicas = body.min_replicas
+    deployment.max_replicas = body.max_replicas
+    current = len(deployment.instances)
+    try:
+        # set_range=False keeps the window we just wrote and only clamps the count into it.
+        await apply_scale(db, deployment, max(body.min_replicas, min(body.max_replicas, current)),
+                          set_range=False)
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="allocation conflict; retry") from None
+    rows = await db.execute(
+        select(Deployment).options(*_DEPLOYMENT_LOADS).where(Deployment.id == deployment_id)
+    )
+    refreshed = rows.scalar_one()
     _with_names(list(refreshed.instances))
     return refreshed
 

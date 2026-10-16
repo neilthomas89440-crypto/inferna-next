@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import type { Deployment, Instance, ModelInfo } from "../api/types";
 import { AuthProvider } from "../context/AuthContext";
@@ -135,4 +135,51 @@ test("single-node instances keep their old presentation", async () => {
 
   await waitFor(() => expect(screen.getByRole("button", { name: "Endpoint" })).toBeInTheDocument());
   expect(screen.queryByTestId("rank-badge-solo")).not.toBeInTheDocument();
+});
+test("the window controls send a range request and label autoscaling", async () => {
+  const calls: { url: string; init?: RequestInit }[] = [];
+  localStorage.setItem("token", "tok");
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((url: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(url);
+      if (path.includes("/auth/me")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ id: "u1", username: "admin", email: null, role: "admin", is_active: true }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      }
+      calls.push({ url: path, init });
+      const body = init?.method === "PUT" ? { ...deployment([instance(0, 8010, "i0")]), min_replicas: 1, max_replicas: 3 } : [deployment([instance(0, 8010, "i0")])];
+      return Promise.resolve(
+        new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } }),
+      );
+    }),
+  );
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={queryClient}>
+      <AuthProvider>
+        <MemoryRouter>
+          <InstancesPage />
+        </MemoryRouter>
+      </AuthProvider>
+    </QueryClientProvider>,
+  );
+
+  // A pinned deployment (min == max) says so.
+  await waitFor(() => expect(screen.getByText("autoscaling off")).toBeInTheDocument());
+  await waitFor(() => expect(screen.getByLabelText(/Min replicas/)).toHaveValue(1));
+
+  fireEvent.change(screen.getByLabelText(/Max replicas/), { target: { value: "3" } });
+  fireEvent.click(screen.getByLabelText(/Apply range/));
+
+  await waitFor(() => {
+    const put = calls.find((call) => call.init?.method === "PUT");
+    expect(put).toBeDefined();
+    expect(String(put?.url)).toContain("/deployments/d1/range");
+    expect(JSON.parse(String(put?.init?.body))).toEqual({ min_replicas: 1, max_replicas: 3 });
+  });
 });

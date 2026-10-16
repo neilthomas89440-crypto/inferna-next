@@ -146,6 +146,24 @@ export function useUsage(params: { days?: number; modelId?: string } = {}) {
   });
 }
 
+export function useSetDeploymentRange() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { id: string; min_replicas: number; max_replicas: number }) =>
+      api<Deployment>(`/deployments/${body.id}/range`, {
+        method: "PUT",
+        body: JSON.stringify({
+          min_replicas: body.min_replicas,
+          max_replicas: body.max_replicas,
+        }),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["deployments"] });
+      queryClient.invalidateQueries({ queryKey: ["instances"] });
+    },
+  });
+}
+
 export function useSetUserLimits() {
   const queryClient = useQueryClient();
   return useMutation({
