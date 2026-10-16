@@ -57,6 +57,6 @@ test("deploy with 2 replicas creates a running group", async ({ page }) => {
   const rows = group.locator('tr[data-testid^="instance-row-"]');
   await expect(rows).toHaveCount(2, { timeout: 30000 });
 
-  const badge = group.locator("tr").first().getByText(/^\d+\/\d+ running$/);
+  const badge = group.locator("tr").first().getByText(/^\d+\/\d+ \(\d+(–\d+)?\) running$/);
   await expect(badge).toHaveText("2/2 (2) running", { timeout: 90000 });
 });
