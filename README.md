@@ -262,6 +262,7 @@ Executable plans for the remaining work live in [`docs/roadmap/plans/`](docs/roa
 - [Architecture](docs/architecture.md) — data flow, ports, directory layout
 - [Network matrix](docs/network-matrix.md) — port contract, three-worker topology, wide-area envelopes
 - [Multi-node parity](docs/multinode-parity.md) · [Coding validation](docs/coding-validation.md) — the measured verdicts and their thresholds
+- [Fault matrix](docs/fault-matrix.md) — what each failure must do, and how the 24 h multi-node soak asserts it
 - [Roadmap](docs/roadmap/README.md) — stages, acceptance criteria, release contract
 - [Implementation plans](docs/roadmap/plans/README.md) — executable plans per remaining stage
 - [Engine matrix](docs/engine-matrix.md) — verified engine × image × GPU combinations
