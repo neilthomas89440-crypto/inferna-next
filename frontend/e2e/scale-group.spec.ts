@@ -47,17 +47,17 @@ test("scale deployment group up and down, then delete it", async ({ page }) => {
   const badge = group.locator("tr").first().getByText(/^\d+\/\d+ running$/);
   const rows = group.locator('tr[data-testid^="instance-row-"]');
   await expect(rows).toHaveCount(1);
-  await expect(badge).toHaveText("1/1 running", { timeout: 90000 });
+  await expect(badge).toHaveText("1/1 (1) running", { timeout: 90000 });
 
   // Scale up to 3 replicas: the button steps min_replicas by +1 per click.
   await group.getByRole("button", { name: "Scale up" }).click();
-  await expect(badge).toHaveText("2/2 running", { timeout: 90000 });
+  await expect(badge).toHaveText("2/2 (2) running", { timeout: 90000 });
   await group.getByRole("button", { name: "Scale up" }).click();
-  await expect(badge).toHaveText("3/3 running", { timeout: 90000 });
+  await expect(badge).toHaveText("3/3 (3) running", { timeout: 90000 });
 
   // Scale down to 2: one replica is stopped (row stays listed), badge shows ready/min.
   await group.getByRole("button", { name: "Scale down" }).click();
-  await expect(badge).toHaveText("2/2 running", { timeout: 90000 });
+  await expect(badge).toHaveText("2/2 (2) running", { timeout: 90000 });
   await expect(rows.filter({ hasText: "stopped" })).toHaveCount(1, { timeout: 30000 });
 
   // Delete the group: confirm dialog clears every row and shows the empty state.
