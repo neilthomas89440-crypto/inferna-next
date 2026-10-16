@@ -61,6 +61,12 @@ inferna_output_tps = Histogram(
     buckets=(1, 5, 10, 20, 30, 50, 75, 100, 200, 500),
 )
 
+inferna_prefix_cache_hit_ratio = Gauge(
+    "inferna_prefix_cache_hit_ratio",
+    "Share of gateway requests whose prompt prefix matched a replica's resident prefix",
+    ["model"],
+)
+
 # Usage accounting outcomes. Reconciles against `inferna_requests_total`: the number of
 # `usage_records` rows/requests should track gateway requests within the same window
 # (`scripts/usage-reconcile.sh` checks this).

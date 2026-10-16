@@ -38,12 +38,14 @@ from inferna_server.services.metrics import (
     inferna_instance_active_requests,
     inferna_inter_token_seconds,
     inferna_output_tps,
+    inferna_prefix_cache_hit_ratio,
     inferna_requests,
     inferna_time_to_first_byte_seconds,
     inferna_tokens,
     inferna_ttft_seconds,
     inferna_usage_events_total,
 )
+from inferna_server.services.prefix_cache import blocks, prefix_cache, prompt_text
 from inferna_server.services.upstream_guard import (
     _extract_host,
     hostname_in_allowlist,
@@ -360,7 +362,10 @@ async def _read_body_limited(request: Request, limit: int = MAX_BODY_SIZE) -> by
     return bytes(body)
 
 async def _resolve_target(
-    db: AsyncSession, model_name: str, request: Request
+    db: AsyncSession,
+    model_name: str,
+    request: Request,
+    digests: list[str] | None = None,
 ) -> tuple[str, ModelInstance, Model]:
     model = (
         await db.execute(select(Model).where(Model.name == model_name))
@@ -401,14 +406,25 @@ async def _resolve_target(
         .all()
     )
     async with _active_lock:
+        # Prefix-cache aware: prefer a replica whose resident prefix overlaps this prompt (an
+        # agent loop resends the same long prefix), then least-loaded, then LRU. A replica that is
+        # not live is not in `rows` at all, so a hot-but-dead replica degrades to plain balancing.
+        prompt_digests = digests or []
+        overlaps = {row.id: prefix_cache.overlap(row.id, prompt_digests) for row in rows}
+        best_overlap = max(overlaps.values(), default=0)
+        pool = [row for row in rows if overlaps[row.id] == best_overlap] if best_overlap else rows
         instance = (
             min(
-                rows,
+                pool,
                 key=lambda i: (_active_by_instance.get(i.id, 0), _last_assigned.get(i.id, 0)),
             )
-            if rows
+            if pool
             else None
         )
+        prefix_cache.note_lookup(best_overlap > 0)
+        hit_ratio = prefix_cache.hit_ratio
+        if hit_ratio is not None:
+            inferna_prefix_cache_hit_ratio.labels(model_name).set(hit_ratio)
         if instance is not None and instance.worker is None:
             instance = None  # unroutable row: reject before reserving a slot
         if instance is not None:
@@ -619,6 +635,8 @@ async def _relay(
         if completed and tokens is None:
             outcome = "no_usage_chunk"
         _observe_serving(ctx, tokens, first_content_at, itl_ms)
+        if ctx.prefix_digests:
+            prefix_cache.record(ctx.instance_id, ctx.prefix_digests)
         record_request(
             ctx,
             tokens_in=tokens[0] if tokens else 0,
@@ -691,13 +709,24 @@ async def _proxy(
         # Token accounting for streams needs a usage chunk; the client's own
         # stream_options (if any) is preserved by _with_stream_usage.
         raw_body = _with_stream_usage(raw_body)
-    target, instance, model = await _resolve_target(db, model_name, request)
+    digests: list[str] = []
+    if content_type.startswith("application/json"):
+        try:
+            payload_for_prefix = json.loads(raw_body)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            payload_for_prefix = None
+        if isinstance(payload_for_prefix, dict):
+            digests = blocks(prompt_text(payload_for_prefix.get("messages")))
+            if not digests and payload_for_prefix.get("input") is not None:
+                digests = blocks(str(payload_for_prefix["input"]))
+    target, instance, model = await _resolve_target(db, model_name, request, digests)
     usage_ctx = UsageContext(
         user_id=key.user_id,
         api_key_id=key.id,
         model_id=model.id,
         model_name=model_name,
         instance_id=instance.id,
+        prefix_digests=digests,
         started=time.monotonic(),
         engine=instance.engine,
         # `parallel_mode` arrives with the multi-node contract; until then every request is single.
