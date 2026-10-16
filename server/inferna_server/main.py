@@ -24,6 +24,7 @@ from inferna_server.config import get_settings
 from inferna_server.db import SessionLocal
 from inferna_server.grpc_server import serve_grpc
 from inferna_server.models import Cluster, User
+from inferna_server.services.autoscaling import autoscale_loop
 from inferna_server.services.usage import flush_usage, usage_flush_loop
 from inferna_server.services.workers_svc import seed_catalog
 from inferna_server.version import SERVER_VERSION
@@ -112,10 +113,12 @@ async def lifespan(app: FastAPI):
     readiness_task = asyncio.create_task(readiness_loop(app))
     flush_task = asyncio.create_task(last_used_flush_loop())
     usage_task = asyncio.create_task(usage_flush_loop())
+    autoscale_task = asyncio.create_task(autoscale_loop())
     app.state.grpc_task = grpc_task
     app.state.readiness_task = readiness_task
     app.state.flush_task = flush_task
     app.state.usage_task = usage_task
+    app.state.autoscale_task = autoscale_task
     settings = get_settings()
     app.state.gateway_client = httpx.AsyncClient(
         timeout=httpx.Timeout(
@@ -130,7 +133,7 @@ async def lifespan(app: FastAPI):
         if gateway_client is not None:
             with suppress(Exception):  # noqa: BLE001
                 await gateway_client.aclose()
-        for t in (grpc_task, readiness_task, flush_task, usage_task):
+        for t in (grpc_task, readiness_task, flush_task, usage_task, autoscale_task):
             t.cancel()
             with suppress(asyncio.CancelledError):
                 try:

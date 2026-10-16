@@ -6,6 +6,7 @@ import {
   useInstanceLogs,
   useRestartInstance,
   useScaleDeployment,
+  useSetDeploymentRange,
   useStopInstance,
 } from "../api/hooks";
 import type { Instance } from "../api/types";
@@ -19,6 +20,8 @@ export default function InstancesPage() {
   const restartInstance = useRestartInstance();
   const deleteInstance = useDeleteInstance();
   const scaleDeployment = useScaleDeployment();
+  const setRange = useSetDeploymentRange();
+  const [rangeDraft, setRangeDraft] = useState<Record<string, { min: string; max: string }>>({});
   const deleteDeployment = useDeleteDeployment();
   const [deleting, setDeleting] = useState<string | null>(null);
   const [deletingGroup, setDeletingGroup] = useState<string | null>(null);
@@ -92,9 +95,88 @@ export default function InstancesPage() {
                   <td className="px-4 py-2 text-slate-600">{dep.profile}</td>
                   <td colSpan={6} className="px-4 py-2">
                     <div className="flex items-center justify-end gap-3">
-                      <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700">
-                        {ready}/{dep.min_replicas} running
+                      <span
+                        data-testid={`replica-badge-${dep.id}`}
+                        className="rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700"
+                      >
+                        {ready}/{dep.min_replicas} (
+                        {dep.min_replicas === dep.max_replicas
+                          ? dep.min_replicas
+                          : `${dep.min_replicas}–${dep.max_replicas}`}
+                        ) running
                       </span>
+                      {dep.max_replicas > dep.min_replicas ? (
+                        <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">
+                          autoscaling on
+                        </span>
+                      ) : (
+                        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500">
+                          autoscaling off
+                        </span>
+                      )}
+                      <label className="flex items-center gap-1 text-xs text-slate-500">
+                        min
+                        <input
+                          aria-label={`Min replicas for ${dep.model?.display_name ?? dep.model_id}`}
+                          type="number"
+                          min={1}
+                          max={8}
+                          value={rangeDraft[dep.id]?.min ?? String(dep.min_replicas)}
+                          onChange={(event) =>
+                            setRangeDraft((draft) => ({
+                              ...draft,
+                              [dep.id]: {
+                                min: event.target.value,
+                                max: draft[dep.id]?.max ?? String(dep.max_replicas),
+                              },
+                            }))
+                          }
+                          className="w-14 rounded-md border border-slate-300 px-1 py-0.5"
+                        />
+                      </label>
+                      <label className="flex items-center gap-1 text-xs text-slate-500">
+                        max
+                        <input
+                          aria-label={`Max replicas for ${dep.model?.display_name ?? dep.model_id}`}
+                          type="number"
+                          min={1}
+                          max={8}
+                          value={rangeDraft[dep.id]?.max ?? String(dep.max_replicas)}
+                          onChange={(event) =>
+                            setRangeDraft((draft) => ({
+                              ...draft,
+                              [dep.id]: {
+                                min: draft[dep.id]?.min ?? String(dep.min_replicas),
+                                max: event.target.value,
+                              },
+                            }))
+                          }
+                          className="w-14 rounded-md border border-slate-300 px-1 py-0.5"
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        aria-label={`Apply range for ${dep.model?.display_name ?? dep.model_id}`}
+                        disabled={setRange.isPending}
+                        onClick={() => {
+                          const draft = rangeDraft[dep.id];
+                          const min = Number(draft?.min ?? dep.min_replicas);
+                          const max = Number(draft?.max ?? dep.max_replicas);
+                          setActionError(null);
+                          setRange.mutate(
+                            { id: dep.id, min_replicas: min, max_replicas: max },
+                            {
+                              onError: (err) =>
+                                setActionError(
+                                  err instanceof Error ? err.message : "Could not set the range",
+                                ),
+                            },
+                          );
+                        }}
+                        className="rounded-md border border-slate-300 px-2 py-0.5 text-xs text-slate-600 hover:bg-slate-100 disabled:opacity-40"
+                      >
+                        Apply
+                      </button>
                       <button
                         type="button"
                         aria-label="Scale down"

@@ -30,6 +30,14 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:5173,http://localhost:8080"
     instance_port_range_start: int = 8010
     instance_port_range_end: int = 8100
+    # Autoscaling (Release B): off by default so no existing stack changes behaviour.
+    autoscale_enabled: bool = False
+    autoscale_interval_seconds: float = 30.0
+    autoscale_cooldown_seconds: float = 300.0
+    autoscale_target_ttft_ms: float = 1000.0
+    autoscale_target_queue: float = 4.0
+    autoscale_scale_down_ratio: float = 0.5
+
     # Rendezvous ports for parallel groups (rank-to-rank NCCL/gloo traffic and the head's
     # control socket). Kept apart from the instance range; see docs/network-matrix.md.
     rendezvous_port_range_start: int = 8110

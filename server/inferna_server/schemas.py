@@ -6,7 +6,7 @@ import uuid
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class ORMModel(BaseModel):
@@ -194,6 +194,19 @@ class DeployRequest(BaseModel):
     # `nodes_per_replica == 1` + "single" is the pre-existing behaviour, unchanged.
     nodes_per_replica: int = Field(default=1, ge=1, le=8)
     parallel_mode: Literal["single", "dp", "pp", "tp", "pd"] = "single"
+
+
+class DeploymentRange(BaseModel):
+    """Autoscaling window for one deployment: the count moves inside it, the window does not."""
+
+    min_replicas: int = Field(ge=1, le=8)
+    max_replicas: int = Field(ge=1, le=8)
+
+    @model_validator(mode="after")
+    def _check_order(self) -> DeploymentRange:
+        if self.max_replicas < self.min_replicas:
+            raise ValueError("max_replicas must be >= min_replicas")
+        return self
 
 
 class ScaleRequest(BaseModel):

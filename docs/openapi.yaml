@@ -730,6 +730,51 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/deployments/{deployment_id}/range:
+    put:
+      tags:
+      - deployments
+      summary: Set Deployment Range
+      description: 'Set the autoscaling window without pinning the replica count.
+
+
+        `POST /scale` means "exactly N" and pins min = max (Release A semantics, unchanged).
+        A window
+
+        is the opposite request: the count is allowed to move between the bounds,
+        and the current count
+
+        is only clamped into them here.'
+      operationId: set_deployment_range_api_v1_deployments__deployment_id__range_put
+      security:
+      - OAuth2PasswordBearer: []
+      parameters:
+      - name: deployment_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Deployment Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeploymentRange'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeploymentOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /api/v1/deployments/{deployment_id}:
     delete:
       tags:
@@ -1406,6 +1451,25 @@ components:
       - max_replicas
       - created_at
       title: DeploymentOut
+    DeploymentRange:
+      properties:
+        min_replicas:
+          type: integer
+          maximum: 8.0
+          minimum: 1.0
+          title: Min Replicas
+        max_replicas:
+          type: integer
+          maximum: 8.0
+          minimum: 1.0
+          title: Max Replicas
+      type: object
+      required:
+      - min_replicas
+      - max_replicas
+      title: DeploymentRange
+      description: 'Autoscaling window for one deployment: the count moves inside
+        it, the window does not.'
     GPUOut:
       properties:
         id:

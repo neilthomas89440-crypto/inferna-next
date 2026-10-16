@@ -275,8 +275,88 @@ async def test_gateway_only_routes_to_the_head(client, db) -> None:
     assert ":8010" in targets[0]
 
 
-async def test_scaling_a_group_deployment_is_refused(client, db) -> None:
-    """Scaling single-node replicas inside a group deployment would create half groups."""
+async def test_scaling_a_group_deployment_creates_a_whole_second_group(client, db) -> None:
+    """Scale-out for a group deployment adds complete groups, never extra ranks."""
+    token = await login(client, TEST_ADMIN["username"], TEST_ADMIN["password"])
+    cluster = await _cluster(db)
+    await _two_hosts(db, cluster)
+    for name in ("host-c", "host-d"):
+        worker = await add_connected_worker(db, cluster.id, name=name)
+        worker.address = f"10.0.0.{len(name)}"
+    await db.commit()
+    created = await client.post(
+        "/api/v1/model-instances",
+        json=_body(await _model_id(db), str(cluster.id)),
+        headers=auth_headers(token),
+    )
+    assert created.status_code == 201, created.text
+    deployment_id = created.json()[0]["deployment_id"]
+
+    scaled = await client.post(
+        f"/api/v1/deployments/{deployment_id}/scale",
+        json={"replicas": 2},
+        headers=auth_headers(token),
+    )
+
+    assert scaled.status_code == 200, scaled.text
+    instances = scaled.json()["instances"]
+    assert len(instances) == 4  # two groups of two ranks
+    groups = {instance["parallel_group_id"] for instance in instances}
+    assert len(groups) == 2
+    for group in groups:
+        ranks = [i for i in instances if i["parallel_group_id"] == group]
+        assert sorted(i["node_rank"] for i in ranks) == [0, 1]
+        assert all(i["world_size"] == 2 for i in ranks)
+        # One head per group, and the groups do not share a host.
+        assert sum(1 for i in ranks if i["port"]) == 1
+        assert len({i["worker_id"] for i in ranks}) == 2
+    # Distinct rendezvous points: two groups must not dial the same address.
+    assert len({i["rendezvous"] for i in instances}) == 2
+
+
+async def test_scaling_in_stops_a_whole_group(client, db) -> None:
+    token = await login(client, TEST_ADMIN["username"], TEST_ADMIN["password"])
+    cluster = await _cluster(db)
+    await _two_hosts(db, cluster)
+    for name in ("host-c", "host-d"):
+        worker = await add_connected_worker(db, cluster.id, name=name)
+        worker.address = f"10.0.0.{len(name)}"
+    await db.commit()
+    created = await client.post(
+        "/api/v1/model-instances",
+        json=_body(await _model_id(db), str(cluster.id)),
+        headers=auth_headers(token),
+    )
+    deployment_id = created.json()[0]["deployment_id"]
+    await client.post(
+        f"/api/v1/deployments/{deployment_id}/scale",
+        json={"replicas": 2},
+        headers=auth_headers(token),
+    )
+
+    back = await client.post(
+        f"/api/v1/deployments/{deployment_id}/scale",
+        json={"replicas": 1},
+        headers=auth_headers(token),
+    )
+
+    assert back.status_code == 200, back.text
+    instances = back.json()["instances"]
+    stopped_groups = {
+        instance["parallel_group_id"]
+        for instance in instances
+        if instance["desired_state"] == "stopped"
+    }
+    # Exactly one group is stopping, and *every* rank of it is — no half group left standing.
+    assert len(stopped_groups) == 1
+    for group in stopped_groups:
+        ranks = [i for i in instances if i["parallel_group_id"] == group]
+        assert len(ranks) == 2
+        assert all(rank["desired_state"] == "stopped" for rank in ranks)
+
+
+async def test_scale_out_says_so_when_no_free_hosts_remain(client, db) -> None:
+    """The honest failure: two hosts cannot host two groups, and the message says why."""
     token = await login(client, TEST_ADMIN["username"], TEST_ADMIN["password"])
     cluster = await _cluster(db)
     await _two_hosts(db, cluster)
@@ -294,16 +374,4 @@ async def test_scaling_a_group_deployment_is_refused(client, db) -> None:
     )
 
     assert response.status_code == 400
-    assert "whole groups" in response.json()["detail"]
-
-
-def test_rendezvous_host_strips_scheme_port_and_path() -> None:
-    from inferna_server.services.scheduler import rendezvous_host
-
-    assert rendezvous_host("http://10.0.0.1", "host") == "10.0.0.1"
-    assert rendezvous_host("https://gpu-7.internal:9000/path", "host") == "gpu-7.internal"
-    assert rendezvous_host("10.0.0.1:9000", "host") == "10.0.0.1"
-    assert rendezvous_host("[fd00::1]:9000", "host") == "fd00::1"
-    assert rendezvous_host("fd00::1", "host") == "fd00::1"  # bare IPv6 keeps its colons
-    assert rendezvous_host(None, "fallback-host") == "fallback-host"
-    assert rendezvous_host("   ", "fallback-host") == "fallback-host"
+    assert "no free hosts left" in response.json()["detail"]

@@ -278,6 +278,8 @@ async def allocate_parallel_replicas(
     vram_required_mb: int,
     engine: str,
     nodes_per_replica: int,
+    *,
+    exclude_worker_ids: Collection[uuid.UUID] | None = None,
 ) -> list[ParallelAllocation]:
     """Place one rank per host for a parallel group; the head is the rank every host can dial.
 
@@ -289,6 +291,14 @@ async def allocate_parallel_replicas(
     workers = list((await _connected_workers(db, cluster_id)).scalars().all())
     if not workers:
         raise HTTPException(status_code=400, detail="no connected workers in cluster")
+    if exclude_worker_ids:
+        # Anti-affinity *between* groups of one deployment: two groups on the same host would
+        # fight over GPUs and share a NIC, which is what one-rank-per-host exists to avoid.
+        workers = [worker for worker in workers if worker.id not in exclude_worker_ids]
+        if not workers:
+            raise HTTPException(
+                status_code=400, detail="no free hosts left for another parallel group"
+            )
 
     supported = ENGINE_VENDORS.get(engine, set())
     fitting: list[tuple[int, Worker, int]] = []

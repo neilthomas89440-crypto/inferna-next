@@ -2,15 +2,30 @@
 
 from __future__ import annotations
 
+import uuid
+
 import structlog
-from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from inferna_server.models import LIVE_STATES, Deployment, ModelInstance, utcnow
-from inferna_server.services.scheduler import allocate_replicas
+from inferna_server.services.scheduler import (
+    allocate_parallel_replicas,
+    allocate_replicas,
+    rendezvous_host,
+)
 
 logger = structlog.get_logger(__name__)
+
+
+def _replica_units(deployment: Deployment) -> list[list[ModelInstance]]:
+    """Group instances into replica units: one instance, or one whole parallel group."""
+    if deployment.nodes_per_replica <= 1:
+        return [[inst] for inst in deployment.instances]
+    groups: dict[object, list[ModelInstance]] = {}
+    for inst in deployment.instances:
+        groups.setdefault(inst.parallel_group_id or inst.id, []).append(inst)
+    return list(groups.values())
 
 
 async def apply_scale(
@@ -30,13 +45,6 @@ async def apply_scale(
     # re-read the replica collection inside the lock; "deployment row → workers"
     # is a lock order no other path uses (the scheduler never touches deployments),
     # so there is no deadlock cycle. On SQLite FOR UPDATE is a no-op.
-    if deployment.nodes_per_replica > 1:
-        # Scaling single-node replicas inside a group deployment would create half groups: the
-        # ranks of one replica must start and stop together. Whole-group scaling is the M8 slice.
-        raise HTTPException(
-            status_code=400,
-            detail="multi-node deployments are scaled as whole groups (not supported yet)",
-        )
     await db.execute(
         select(Deployment).where(Deployment.id == deployment.id).with_for_update()
     )
@@ -52,64 +60,121 @@ async def apply_scale(
     # have not come up yet but are on track and count toward the target capacity.
     # Terminally errored replicas hold a port/GPU slot while serving nothing, so
     # they must not count as capacity.
-    live = [inst for inst in deployment.instances if inst.desired_state == "running"]
-    serving = [inst for inst in live if inst.state == "running"]
-    pending = [inst for inst in live if inst.state != "running" and inst.state in LIVE_STATES]
-    broken = [inst for inst in live if inst.state == "error"]
+    # A replica *unit* is one instance for single-node deployments and one whole parallel group
+    # for multi-node ones: ranks must start and stop together, and counting them separately is
+    # exactly how half groups get created.
+    units = _replica_units(deployment)
+    live = [unit for unit in units if any(inst.desired_state == "running" for inst in unit)]
+    serving = [unit for unit in live if all(inst.state == "running" for inst in unit)]
+    pending = [
+        unit
+        for unit in live
+        if unit not in serving and all(inst.state in LIVE_STATES for inst in unit)
+    ]
+    broken = [unit for unit in live if any(inst.state == "error" for inst in unit)]
     # Stop (not delete) the broken replicas exactly like a scale-in would: the
     # generation bump tells the worker to tear down the container and free its
     # port/GPU slot; the record stays for auditability. Replacing them via fresh
     # allocate_replicas records yields a clean placement — auto-restarting the
     # same record is Release B scope.
-    for inst in broken:
-        inst.desired_state = "stopped"
-        inst.generation += 1
-        inst.error_detail = None
+    for unit in broken:
+        for inst in unit:
+            inst.desired_state = "stopped"
+            inst.generation += 1
+            inst.error_detail = None
     effective_capacity = len(serving) + len(pending)
     action = "out" if replicas > effective_capacity else "in"
     if replicas > effective_capacity:
         # Anti-affinity against the GPU pairs already held by this group.
         used = {
             (inst.worker_id, index)
-            for inst in (*serving, *pending)
+            for unit in (*serving, *pending)
+            for inst in unit
             for index in inst.gpu_indexes
             if inst.worker_id
         }
-        allocations = await allocate_replicas(
-            db,
-            deployment.cluster_id,
-            deployment.model.vram_required_mb,
-            deployment.engine,
-            replicas - effective_capacity,
-            used,
-        )
-        for worker, gpu_indexes, port in allocations:
-            deployment.instances.append(
-                ModelInstance(
-                    model_id=deployment.model_id,
-                    cluster_id=deployment.cluster_id,
-                    worker_id=worker.id,
-                    engine=deployment.engine,
-                    profile=deployment.profile,
-                    gpu_indexes=gpu_indexes,
-                    state="scheduled",
-                    desired_state="running",
-                    generation=1,
-                    port=port,
+        new_units = replicas - effective_capacity
+        if deployment.nodes_per_replica > 1:
+            occupied = {inst.worker_id for unit in units for inst in unit if inst.worker_id}
+            for _ in range(new_units):
+                allocations = await allocate_parallel_replicas(
+                    db,
+                    deployment.cluster_id,
+                    deployment.model.vram_required_mb,
+                    deployment.engine,
+                    deployment.nodes_per_replica,
+                    exclude_worker_ids=occupied,
                 )
+                head = allocations[0]
+                rendezvous = (
+                    f"{rendezvous_host(head.worker.address, head.worker.hostname)}"
+                    f":{head.rendezvous_port}"
+                )
+                group_id = uuid.uuid4()
+                for allocation in allocations:
+                    deployment.instances.append(
+                        ModelInstance(
+                            model_id=deployment.model_id,
+                            cluster_id=deployment.cluster_id,
+                            worker_id=allocation.worker.id,
+                            engine=deployment.engine,
+                            profile=deployment.profile,
+                            gpu_indexes=allocation.gpu_indexes,
+                            state="scheduled",
+                            desired_state="running",
+                            generation=1,
+                            port=allocation.instance_port,
+                            parallel_group_id=group_id,
+                            node_rank=allocation.node_rank,
+                            world_size=deployment.nodes_per_replica,
+                            parallel_mode=deployment.parallel_mode,
+                            rendezvous=rendezvous,
+                        )
+                    )
+                    occupied.add(allocation.worker.id)
+        else:
+            allocations = await allocate_replicas(
+                db,
+                deployment.cluster_id,
+                deployment.model.vram_required_mb,
+                deployment.engine,
+                new_units,
+                used,
             )
+            for worker, gpu_indexes, port in allocations:
+                deployment.instances.append(
+                    ModelInstance(
+                        model_id=deployment.model_id,
+                        cluster_id=deployment.cluster_id,
+                        worker_id=worker.id,
+                        engine=deployment.engine,
+                        profile=deployment.profile,
+                        gpu_indexes=gpu_indexes,
+                        state="scheduled",
+                        desired_state="running",
+                        generation=1,
+                        port=port,
+                    )
+                )
     elif replicas < effective_capacity:
         # Stop non-running replicas first (starting/scheduled), then oldest running —
         # exactly like POST /{id}/stop so the worker receives the stop command via
         # generation. Broken replicas are already stopped above and hold no capacity.
         candidates = serving + pending
-        to_stop = sorted(candidates, key=lambda inst: (inst.state == "running", inst.created_at))[
-            : effective_capacity - replicas
-        ]
-        for inst in to_stop:
-            inst.desired_state = "stopped"
-            inst.generation += 1
-            inst.error_detail = None
+        # Partial groups are stopped first, then the oldest complete ones — the same rule as
+        # before, now applied to units so a group is never left half-standing.
+        to_stop = sorted(
+            candidates,
+            key=lambda unit: (
+                all(inst.state == "running" for inst in unit),
+                min(inst.created_at for inst in unit),
+            ),
+        )[: effective_capacity - replicas]
+        for unit in to_stop:
+            for inst in unit:
+                inst.desired_state = "stopped"
+                inst.generation += 1
+                inst.error_detail = None
     if set_range:
         deployment.min_replicas = replicas
         deployment.max_replicas = replicas
