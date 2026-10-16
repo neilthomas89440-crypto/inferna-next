@@ -152,11 +152,34 @@ export default function InstancesPage() {
                     </td>
                     <td className="px-4 py-2 text-slate-600">{inst.engine}</td>
                     <td className="px-4 py-2 text-slate-600">{inst.profile}</td>
-                    <td className="px-4 py-2 text-slate-600">{inst.worker_name ?? "—"}</td>
+                    <td className="px-4 py-2 text-slate-600">
+                      {inst.worker_name ?? "—"}
+                      {inst.node_rank !== null && (
+                        <span
+                          data-testid={`rank-badge-${inst.id}`}
+                          className={`ml-2 rounded-full px-2 py-0.5 text-xs font-medium ${
+                            inst.node_rank === 0
+                              ? "bg-emerald-100 text-emerald-700"
+                              : "bg-slate-100 text-slate-600"
+                          }`}
+                          title={inst.rendezvous ? `rendezvous ${inst.rendezvous}` : undefined}
+                        >
+                          {inst.node_rank === 0 ? "head" : `rank ${inst.node_rank}`}
+                          {inst.world_size ? ` / ${inst.world_size}` : ""}
+                        </span>
+                      )}
+                    </td>
                     <td className="px-4 py-2 font-mono text-slate-600">
                       {inst.gpu_indexes.join(", ") || "—"}
                     </td>
-                    <td className="px-4 py-2 font-mono text-slate-600">{inst.port ?? "—"}</td>
+                    <td className="px-4 py-2 font-mono text-slate-600">
+                      {inst.port ?? "—"}
+                      {inst.parallel_group_id && inst.node_rank !== 0 && inst.rendezvous && (
+                        <div className="text-xs text-slate-400" title="rendezvous point">
+                          → {inst.rendezvous}
+                        </div>
+                      )}
+                    </td>
                     <td className="px-4 py-2">
                       <StateBadge state={inst.state} />
                       {inst.error_detail && (
@@ -169,7 +192,7 @@ export default function InstancesPage() {
                       )}
                     </td>
                     <td className="px-4 py-2">
-                      {inst.state === "running" ? (
+                      {inst.state === "running" && (inst.node_rank ?? 0) === 0 ? (
                         <button
                           type="button"
                           onClick={() => {
@@ -182,6 +205,7 @@ export default function InstancesPage() {
                           Endpoint
                         </button>
                       ) : (
+                        // A follower has no API server: only the head exposes an endpoint.
                         <span className="text-slate-400">—</span>
                       )}
                     </td>
