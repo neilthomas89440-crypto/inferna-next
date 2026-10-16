@@ -129,8 +129,8 @@ stopped → deleted`. Текущий smoke только открывает и з
 | 3. Custom models | доставлено | `docs/roadmap/plans/evidence-p03-custom-models.md` |
 | 4. Deployments и реплики | доставлено (Release A) | `server/tests/test_deployments_api.py` |
 | 5. Usage и quotas | доставлено | `docs/roadmap/plans/evidence-p05-usage-metering.md` |
-| 6. Autoscaling | не начато | план: `docs/roadmap/plans/plan-02-release-b-autoscaling.md` |
-| 7. Distributed inference | в работе: M0–M6 доставлено (железные гейты — BLOCKED) | `docs/roadmap/plans/evidence-*.md`, `docs/multinode-parity.md` |
+| 6. Autoscaling | доставлено (Phase 1+2) | `docs/roadmap/plans/evidence-p02b-autoscaling.md` |
+| 7. Distributed inference | в работе: M0–M8 доставлено (железные гейты — BLOCKED) | `docs/roadmap/plans/evidence-*.md`, `docs/multinode-parity.md` |
 
 По направлению 7 закрыты: M0 (гигиена репозитория), M1 (харнесс замеров и телеметрия gateway:
 TTFT/ITL/TPS в `/metrics`), M2.1 (замороженный контракт `proto`+схема), M2.2 (сервер размещает

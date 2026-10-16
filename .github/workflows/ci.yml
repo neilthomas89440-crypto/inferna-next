@@ -110,6 +110,58 @@ jobs:
         working-directory: frontend
         run: npx vitest run
 
+  usage-reconcile:
+    runs-on: ubuntu-latest
+    needs: [backend]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+      - name: Start stack (mock)
+        run: docker compose -f docker-compose.yml -f docker-compose.mock.yml up -d --build postgres server worker
+      - name: Wait for the server
+        run: |
+          for i in $(seq 1 60); do
+            curl -fsS http://localhost:8000/healthz && exit 0
+            sleep 5
+          done
+          exit 1
+      - name: Deploy a model and create a key
+        # The gateway needs a live instance and a key; the mock worker has no engine, so the calls
+        # below answer 502 - which must still be *counted* (that is what the reconciliation checks).
+        run: |
+          python3 - <<'PY' >> "$GITHUB_ENV"
+          import json, time, urllib.request
+          B = "http://localhost:8000/api/v1"
+          def call(method, path, body=None, token=None):
+              data = json.dumps(body).encode() if body is not None else None
+              r = urllib.request.Request(B + path, method=method, data=data)
+              if data: r.add_header("Content-Type", "application/json")
+              if token: r.add_header("Authorization", "Bearer " + token)
+              with urllib.request.urlopen(r) as resp:
+                  raw = resp.read()
+                  return json.loads(raw) if raw else None
+          token = call("POST", "/auth/login", {"username": "admin", "password": "inferna"})["access_token"]
+          model = call("GET", "/models", token=token)[0]
+          key = call("POST", "/keys", {"name": "ci-usage"}, token=token)["key"]
+          clusters = call("GET", "/clusters", token=token)
+          cluster = (clusters if isinstance(clusters, list) else clusters["items"])[0]
+          call("POST", "/model-instances", {"model_id": model["id"], "cluster_id": cluster["id"],
+                                            "engine": "vllm", "profile": "latency", "replicas": 1,
+                                            "gpu_selection": "auto"}, token=token)
+          time.sleep(25)  # let the worker sync the instance to running
+          print(f"INFERNA_JWT={token}")
+          print(f"INFERNA_MODEL={model['name']}")
+          print(f"INFERNA_KEY={key}")
+          PY
+      - name: Reconcile usage against /metrics
+        # M8 gate: usage aggregates must match the gateway counters within the tolerance.
+        run: |
+          python3 scripts/usage-reconcile.py --api http://localhost:8000 --token "$INFERNA_JWT" \
+            --days 1 --window 30 \
+            --traffic-cmd "bash scripts/bench.sh --api http://localhost:8000 --api-key $INFERNA_KEY \
+              --model $INFERNA_MODEL --scenario ttft-only --repeats 6 --warmup 1 --allow-errors \
+              --environment mock"
+
   coding-validation-mock:
     runs-on: ubuntu-latest
     needs: [backend]
