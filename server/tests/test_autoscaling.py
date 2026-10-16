@@ -275,3 +275,45 @@ async def test_range_endpoint_requires_auth(client, db) -> None:
     )
 
     assert response.status_code == 401
+
+
+async def test_range_endpoint_clamps_by_groups_not_ranks(client, db) -> None:
+    """Regression: a two-rank group is one replica, so widening the window must not allocate a group.
+
+    The endpoint compared the window against `len(instances)`, so a 2-rank group looked like two
+    replicas and `min 1 / max 3` tried to spin up a second group on a two-host cluster: 400
+    "no free hosts left for another parallel group" for a request that should have been a no-op.
+    """
+    token = await login(client, TEST_ADMIN["username"], TEST_ADMIN["password"])
+    cluster = (await db.execute(select(Cluster).where(Cluster.name == "default"))).scalar_one()
+    for name, address in (("grp-a", "10.0.0.1"), ("grp-b", "10.0.0.2")):
+        worker = await add_connected_worker(db, cluster.id, name=name)
+        worker.address = address
+    await db.commit()
+    model = (await db.execute(select(Model).where(Model.name == "Qwen/Qwen2.5-0.5B-Instruct"))).scalar_one()
+    created = await client.post(
+        "/api/v1/model-instances",
+        json={
+            "model_id": str(model.id),
+            "cluster_id": str(cluster.id),
+            "engine": "vllm",
+            "profile": "latency",
+            "replicas": 1,
+            "gpu_selection": "auto",
+            "nodes_per_replica": 2,
+            "parallel_mode": "pp",
+        },
+        headers=auth_headers(token),
+    )
+    assert created.status_code == 201, created.text
+    deployment_id = created.json()[0]["deployment_id"]
+
+    widened = await client.put(
+        f"/api/v1/deployments/{deployment_id}/range",
+        json={"min_replicas": 1, "max_replicas": 3},
+        headers=auth_headers(token),
+    )
+
+    assert widened.status_code == 200, widened.text
+    assert (widened.json()["min_replicas"], widened.json()["max_replicas"]) == (1, 3)
+    assert len(widened.json()["instances"]) == 2  # still one group, untouched

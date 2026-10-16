@@ -18,6 +18,16 @@ from inferna_server.services.scheduler import (
 logger = structlog.get_logger(__name__)
 
 
+def replica_unit_count(deployment: Deployment) -> int:
+    """How many replica units the deployment has: instances, or whole groups for multi-node.
+
+    Anything that clamps a replica count into a window has to use *this* number: the endpoint that
+    sets an autoscaling window used instance rows, so a two-rank group looked like two replicas and
+    a widen-the-window request tried to allocate a second group out of nowhere.
+    """
+    return len(_replica_units(deployment))
+
+
 def _replica_units(deployment: Deployment) -> list[list[ModelInstance]]:
     """Group instances into replica units: one instance, or one whole parallel group."""
     if deployment.nodes_per_replica <= 1:
