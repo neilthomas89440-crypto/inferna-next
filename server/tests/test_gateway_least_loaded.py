@@ -1,6 +1,7 @@
 """Gateway routing tests: least-active selection, LRU tie-break, slot release."""
 
 import asyncio
+import itertools
 
 import httpx
 import pytest
@@ -54,11 +55,24 @@ async def _admin_and_key(client) -> str:
     return resp.json()["key"]
 
 
+_prompt_seq = itertools.count()
+
+
 async def _chat(client, key: str, model: str) -> httpx.Response:
+    """Chat with a *distinct* prompt per call.
+
+    Prefix-cache aware routing (services/prefix_cache.py) deliberately pins repeated prompts to
+    the replica that already holds them, so a fixed prompt would make these balancing tests
+    measure that policy instead of least-loaded/LRU. The prefix stickiness has its own suite
+    (tests/test_prefix_cache.py).
+    """
     return await client.post(
         "/v1/chat/completions",
         headers=auth_headers(key),
-        json={"model": model, "messages": [{"role": "user", "content": "hi"}]},
+        json={
+            "model": model,
+            "messages": [{"role": "user", "content": f"hi {next(_prompt_seq)}"}],
+        },
     )
 
 

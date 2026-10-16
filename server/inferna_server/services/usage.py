@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 
 import structlog
@@ -51,6 +51,9 @@ class UsageContext:
     # ("single" until the multi-node contract adds `parallel_mode`).
     engine: str = "unknown"
     parallelism: str = "single"
+    # Prefix blocks of the prompt: recorded against the instance after the request completes so
+    # the next request with the same prefix prefers that replica (see services/prefix_cache.py).
+    prefix_digests: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
