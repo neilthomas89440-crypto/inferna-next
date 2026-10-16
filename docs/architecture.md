@@ -114,3 +114,26 @@ inferna-next/
 `scheduled` → `starting` → `running` ⇄ `stopped`; any → `error`.
 The worker is authoritative for live reality; the server only transitions `scheduled`
 (deploy) and `stopped` (stop request) and marks `error` on disconnect/removal.
+
+## Multi-node (parallel groups)
+
+A deployment with `nodes_per_replica = N` and a `parallel_mode` other than `single` is one
+*parallel group*: N ranks, one host each, all sharing a `parallel_group_id`.
+
+- **Placement** (`services/scheduler.allocate_parallel_replicas`): one rank per host (never two on
+  one box), best-fit GPU per rank, and the head is a host whose registered `address` is routable
+  because every other rank dials it. Only the head gets an instance port.
+- **Contract on the wire**: `EngineConfig.parallelism`/`.rendezvous` (plus
+  `Rendezvous.env` carrying `MASTER_ADDR`/`MASTER_PORT`) tell each rank its role; the worker
+  translates that into engine flags and never decides topology. `ModelInstance.rendezvous` holds
+  `host:port` of the head and is the only place that address lives.
+- **Containers**: multi-node instances run with `network_mode="host"` and no port mapping — NCCL
+  opens peer connections that NAT would break, and a follower must not publish a port at all.
+- **Routing**: the gateway selects `node_rank == 0` only, so the OpenAI endpoint never reaches a
+  follower (which has no API server anyway).
+- **Ports, firewall and the wide-area envelope**: see [network matrix](network-matrix.md); the
+  measured parity verdicts live in [multinode parity](multinode-parity.md).
+
+`nodes_per_replica = 1` (the default) leaves every code path byte-identical to the single-node
+behaviour: empty `parallelism`/`rendezvous` messages, bridge networking, container port 8000 mapped
+to the allocated host port.

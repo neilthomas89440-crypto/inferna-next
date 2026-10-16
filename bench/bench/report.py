@@ -7,6 +7,9 @@ from dataclasses import dataclass, field
 from bench.client import RequestResult
 from bench.metrics import mean, pct, tps
 
+# Below this the generation window is an artefact of stream coalescing, not a measurement.
+MIN_MEASURABLE_GENERATION_MS = 1.0
+
 
 @dataclass(slots=True)
 class CaseResult:
@@ -22,12 +25,16 @@ class CaseResult:
         ttfts = [result.ttft_ms for result in ok if result.ttft_ms is not None]
         e2es = [result.e2e_ms for result in ok]
         itls = [value for result in ok for value in result.itl_ms]
-        throughputs = [
-            value
-            for result in ok
-            if (value := tps(result.completion_tokens, (result.generation_ms or 0) / 1000))
-            is not None
-        ]
+        # A window below 1 ms means the transport coalesced the stream (a proxy buffering the
+        # response, or the fake upstream) — throughput is then not measurable, not infinite.
+        throughputs: list[float] = []
+        for result in ok:
+            window_ms = result.generation_ms
+            if window_ms is None or window_ms < MIN_MEASURABLE_GENERATION_MS:
+                continue
+            value = tps(result.completion_tokens, window_ms / 1000)
+            if value is not None:
+                throughputs.append(value)
         return {
             "requests": len(self.results),
             "errors": len(self.results) - len(ok),
