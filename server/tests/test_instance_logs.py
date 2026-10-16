@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 
 from conftest import TEST_ADMIN, auth_headers, login
@@ -197,3 +198,87 @@ async def test_logs_endpoint_unknown_instance_and_auth(client, db, deployment_fa
     assert unauthorized.status_code == 401
     assert not_found.status_code == 404
     assert not_found.json()["detail"] == "instance not found"
+
+
+# --- live refresh (the pull-based equivalent of "fetch logs now") ---
+
+
+async def test_live_logs_refresh_from_the_next_sync(client, db, deployment_factory, monkeypatch) -> None:
+    """`live=true` waits for the worker's next Sync, because the server never dials a GPU host."""
+    from inferna_server.api import instances as instances_api
+    from inferna_server.services.workers_svc import sync_worker
+
+    monkeypatch.setattr(instances_api, "LIVE_LOG_WAIT_SECONDS", 5.0)
+    monkeypatch.setattr(instances_api, "LIVE_LOG_POLL_SECONDS", 0.05)
+    token = await login(client, TEST_ADMIN["username"], TEST_ADMIN["password"])
+    worker_id, worker_token = await _worker(db)
+    instance = await _scheduled_instance(db, worker_id)
+    instance.log_tail = "old line"
+    await db.commit()
+
+    async def refresh_soon() -> None:
+        # A Sync is what "live" waits for; it touches the worker heartbeat even when the row's
+        # fields do not change (that is why freshness is not measured on `updated_at`).
+        await asyncio.sleep(0.2)
+        await sync_worker(
+            db, _sync(worker_id, worker_token, [_status(str(instance.id), log_tail="fresh line")])
+        )
+
+    task = asyncio.create_task(refresh_soon())
+    resp = await client.get(
+        f"/api/v1/model-instances/{instance.id}/logs?live=true", headers=auth_headers(token)
+    )
+    await task
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["log_tail"] == "fresh line"
+    assert body["stale"] is False
+
+
+async def test_live_logs_report_stale_instead_of_failing(client, db, deployment_factory, monkeypatch) -> None:
+    from inferna_server.api import instances as instances_api
+
+    monkeypatch.setattr(instances_api, "LIVE_LOG_WAIT_SECONDS", 0.3)
+    monkeypatch.setattr(instances_api, "LIVE_LOG_POLL_SECONDS", 0.05)
+    token = await login(client, TEST_ADMIN["username"], TEST_ADMIN["password"])
+    instance = await _instance_row(db, deployment_factory, log_tail="old line")
+
+    resp = await client.get(
+        f"/api/v1/model-instances/{instance.id}/logs?live=true", headers=auth_headers(token)
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["stale"] is True
+    assert resp.json()["log_tail"] == "old line"
+
+
+async def test_log_lines_are_capped_on_request(client, db, deployment_factory) -> None:
+    token = await login(client, TEST_ADMIN["username"], TEST_ADMIN["password"])
+    instance = await _instance_row(
+        db, deployment_factory, log_tail="\n".join(f"line {index}" for index in range(50))
+    )
+
+    resp = await client.get(
+        f"/api/v1/model-instances/{instance.id}/logs?lines=5", headers=auth_headers(token)
+    )
+    too_many = await client.get(
+        f"/api/v1/model-instances/{instance.id}/logs?lines=5000", headers=auth_headers(token)
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["log_tail"].splitlines() == [f"line {index}" for index in range(45, 50)]
+    assert resp.json()["lines"] == 5
+    assert too_many.status_code == 422
+
+
+async def test_missing_snapshot_stays_none_with_line_capping(client, db, deployment_factory) -> None:
+    token = await login(client, TEST_ADMIN["username"], TEST_ADMIN["password"])
+    instance = await _instance_row(db, deployment_factory, log_tail=None)
+
+    resp = await client.get(
+        f"/api/v1/model-instances/{instance.id}/logs?lines=10", headers=auth_headers(token)
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["log_tail"] is None  # "no logs yet" is not an empty string

@@ -125,6 +125,10 @@ class InstanceLogsOut(ORMModel):
     state: str
     log_tail: str | None
     updated_at: datetime
+    # `live=true` waits for the worker's next Sync before answering (the worker polls; the server
+    # never dials a GPU host). `stale` says the wait expired and this is the previous snapshot.
+    stale: bool = False
+    lines: int = 0
 
 
 class WorkerOut(ORMModel):

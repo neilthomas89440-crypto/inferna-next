@@ -629,7 +629,12 @@ paths:
       tags:
       - instances
       summary: Instance Logs
-      description: Last log snapshot the worker reported for this instance (no streaming).
+      description: "The worker's last log snapshot for this instance.\n\nWith `live=true`\
+        \ the endpoint waits (bounded) for the next Sync, because the control plane\
+        \ is\npull-based and the server never dials a GPU host \u2014 a follower rank\
+        \ needs no inbound access\neither (see docs/network-matrix.md). `stale=true`\
+        \ means the wait expired and the answer is the\nprevious snapshot rather than\
+        \ a failure: a five-second-old log tail is still useful."
       operationId: instance_logs_api_v1_model_instances__instance_id__logs_get
       security:
       - OAuth2PasswordBearer: []
@@ -641,6 +646,24 @@ paths:
           type: string
           format: uuid
           title: Instance Id
+      - name: live
+        in: query
+        required: false
+        schema:
+          type: boolean
+          description: wait for the worker's next Sync first
+          default: false
+          title: Live
+        description: wait for the worker's next Sync first
+      - name: lines
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 1000
+          minimum: 1
+          default: 100
+          title: Lines
       responses:
         '200':
           description: Successful Response
@@ -1455,6 +1478,14 @@ components:
           type: string
           format: date-time
           title: Updated At
+        stale:
+          type: boolean
+          title: Stale
+          default: false
+        lines:
+          type: integer
+          title: Lines
+          default: 0
       type: object
       required:
       - instance_id
