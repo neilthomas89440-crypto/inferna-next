@@ -126,3 +126,24 @@ persisted in between).
   `scripts/*.py` precedent. The plan's "panels in the Grafana usage dashboard" landed as two
   panels in `deploy/grafana/dashboards/gateway.json` (accounting by outcome, and the
   events/requests ratio that catches dropped accounting).
+
+# M8 slice: usage reconciliation as a CI gate
+
+Stage 5 shipped the aggregator and `scripts/usage-reconcile.py`; M8 asks for the reconciliation to be
+a gate rather than a thing an operator remembers. The `usage-reconcile` CI job does exactly that:
+
+1. brings up the mock stack (`postgres`, `server` with the gateway enabled, mock `worker`);
+2. deploys a model through the API and issues a key (the mock worker has no engine, so the gateway
+   answers 502 — which must still be **counted**; that is the property being reconciled);
+3. runs `scripts/usage-reconcile.py --traffic-cmd "bash scripts/bench.sh …"` with the bench harness as
+   the traffic generator, and fails the job when the stored records and the Prometheus counters drift
+   beyond 1 %.
+
+Why the mock stack is enough for this gate: the thing under test is the accounting path (buffer →
+flush → records) and its agreement with `inferna_requests_total`/`inferna_tokens_total`, not the
+engine. A 502 exercises the `upstream_error` accounting path end to end, and the reconcile script
+refuses to compare while counters are still moving.
+
+Per-key and per-user breakdown (`api_key_id` in `usage_records`, `?key_id=` on the endpoint) landed
+with stage 5, so M8 needs no schema change here; whole-group autoscaling — the other half of M8 — is
+`docs/roadmap/plans/evidence-p02b-autoscaling.md`.
