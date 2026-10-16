@@ -32,3 +32,38 @@ def test_hist_p95_uses_bucket_boundaries() -> None:
     assert round(hist_p95([0.5, 1.0], [10, 10]) or 0, 3) == 0.475
     assert hist_p95([0.5, 1.0], [0, 0]) is None
     assert hist_p95([], []) is None
+
+
+def test_coalesced_stream_is_not_reported_as_infinite_throughput() -> None:
+    """Regression: a stream delivered in one read made tokens/second absurd (19426 tok/s)."""
+    from bench.client import RequestResult
+    from bench.report import CaseResult
+
+    coalesced = RequestResult(
+        status=200,
+        e2e_ms=3.0,
+        ttft_ms=2.5,
+        itl_ms=[0.02] * 7,  # all chunks arrived in the same read
+        completion_tokens=8,
+    )
+    case = CaseResult(label="coalesced", results=[coalesced])
+
+    assert case.summary()["mean_tps"] is None
+
+
+def test_spaced_stream_reports_throughput() -> None:
+    from bench.client import RequestResult
+    from bench.report import CaseResult
+
+    spaced = RequestResult(
+        status=200,
+        e2e_ms=200.0,
+        ttft_ms=20.0,
+        itl_ms=[20.0] * 7,  # 20 ms between tokens
+        completion_tokens=8,
+    )
+    case = CaseResult(label="spaced", results=[spaced])
+
+    throughput = case.summary()["mean_tps"]
+    assert throughput is not None
+    assert 50 < throughput < 60  # 8 tokens over 140 ms

@@ -20,4 +20,7 @@ if [ ! -d bench ]; then
   exit 2
 fi
 
-exec uv run --project bench --directory bench python -m bench "$@"
+# Run from the repository root (PYTHONPATH points at the project) so relative `--out` paths
+# land in the repo's git-ignored `artifacts/` directory, not inside the bench project.
+export PYTHONPATH="${PWD}/bench${PYTHONPATH:+:${PYTHONPATH}}"
+exec uv run --project bench python -m bench "$@"

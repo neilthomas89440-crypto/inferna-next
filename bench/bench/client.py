@@ -22,7 +22,14 @@ class RequestResult:
 
     @property
     def generation_ms(self) -> float | None:
-        """Time spent producing tokens (e2e minus time to first token)."""
+        """Window in which tokens were produced.
+
+        Measured between content chunks: `e2e - ttft` collapses when a proxy (or a test
+        fixture) delivers the whole stream in one read, which inflates tokens/second into
+        nonsense. Falls back to `e2e - ttft` when there is only one content chunk.
+        """
+        if self.itl_ms:
+            return float(sum(self.itl_ms))
         if self.ttft_ms is None:
             return None
         return self.e2e_ms - self.ttft_ms

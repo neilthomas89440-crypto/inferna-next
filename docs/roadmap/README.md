@@ -118,3 +118,23 @@ stopped → deleted`. Текущий smoke только открывает и з
 
 После этапов 0–2 проект можно честно называть self-hosted Model-as-a-Service. До этого
 это качественный control-plane prototype, но не production inference platform.
+
+## Статус реализации (на 16 октября 2026)
+
+| Этап | Состояние | Где доказательства |
+| --- | --- | --- |
+| 0. Production readiness | доставлено | `docs/phase0-validation.md` |
+| 1. Inference gateway | доставлено | `server/tests/test_gateway*.py` |
+| 2. Диагностика | доставлено | `docs/roadmap/plans/evidence-p04-instance-logs.md` |
+| 3. Custom models | доставлено | `docs/roadmap/plans/evidence-p03-custom-models.md` |
+| 4. Deployments и реплики | доставлено (Release A) | `server/tests/test_deployments_api.py` |
+| 5. Usage и quotas | доставлено | `docs/roadmap/plans/evidence-p05-usage-metering.md` |
+| 6. Autoscaling | не начато | план: `docs/roadmap/plans/plan-02-release-b-autoscaling.md` |
+| 7. Distributed inference | в работе: M0–M3 доставлено, M4/M5 дальше | `docs/roadmap/plans/evidence-*.md`, `docs/multinode-parity.md` |
+
+По направлению 7 закрыты: M0 (гигиена репозитория), M1 (харнесс замеров и телеметрия gateway:
+TTFT/ITL/TPS в `/metrics`), M2.1 (замороженный контракт `proto`+схема), M2.2 (сервер размещает
+параллельную группу, воркер её исполняет; mock-lifecycle deploy → running → stop → delete проверен
+живьём), M3 (порты/топология/netem — `docs/network-matrix.md`). Железные гейты (M2-железо, M4, M6,
+M9) помечены в evidence как `BLOCKED: no GPU hosts` и закрываются на первом реальном стенде.
+
