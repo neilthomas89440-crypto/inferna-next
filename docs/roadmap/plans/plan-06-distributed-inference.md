@@ -373,8 +373,9 @@ TTFT повторного ≤ 60 % холодного; при убийстве �
 сценарии — убийство rank 0 mid-stream, потеря пира rank 1→2, рестарт воркера с живым контейнером,
 netem loss 5 % mid-generation, рестарт сервера во время деплоя. Ожидания: предсказуемая ошибка
 клиенту, остальные реплики живы, осиротевших контейнеров нет (`labels`-adoption уже есть,
-`manager.adopt_existing:69-134`). `scripts/soak-multinode.sh` — 24 ч с рандомизированными сбоями по
-образцу `scripts/soak.sh` (JSONL в `artifacts/`).
+`manager.adopt_existing:69-134`). `scripts/soak-multinode.sh` (+ `scripts/soak_multinode.py`) — 24 ч с ротацией сбоев, инварианты
+проверяются каждый цикл (409/500, группа не остановилась, остались ранги — провал). Матрица
+сбоев и ожиданий — `docs/fault-matrix.md`; smoke-режим `--cycles N` работает и без Docker.
 
 **`w4/diagnostics`** (владеет `services/logs.py`, `api/instances.py` — логи, `api/diagnostics.py`):
 per-rank логи поверх направления `04` (каждый ранг — своя строка `ModelInstance`, поэтому
