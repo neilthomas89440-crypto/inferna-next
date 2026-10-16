@@ -20,7 +20,12 @@ import structlog
 from docker.types import DeviceRequest
 
 from inferna_worker.config import Settings
-from inferna_worker.engines.base import build_command, image_for
+from inferna_worker.engines.base import (
+    MultiNodeSpec,
+    build_command,
+    image_for,
+    multi_node_env,
+)
 from inferna_worker.proto import cluster_pb2
 
 logger = structlog.get_logger(__name__)
@@ -32,6 +37,8 @@ LABEL_GENERATION = "inferna.generation"
 LABEL_PORT = "inferna.port"
 HEALTH_PROBE_INTERVAL_SECONDS = 10
 HEALTH_PROBE_TIMEOUT_SECONDS = 2400
+# One HTTP attempt must never outlive this; a wedged connect would otherwise stall the probe.
+PROBE_ATTEMPT_TIMEOUT_SECONDS = 5.0
 IMAGE_PULL_TIMEOUT_SECONDS = 1800
 CONTAINER_OP_TIMEOUT_SECONDS = 120
 STOP_TIMEOUT_SECONDS = 60
@@ -158,6 +165,16 @@ class InstanceManager:
         return await self.statuses()
 
     async def _apply_batch(self, commands: list[cluster_pb2.InstanceCommand]) -> None:
+        # Multi-node teardown order matters: followers must stop before the head, or a dead
+        # head strands them (NCCL peers gone, engine retrying forever). Starts keep the
+        # server's order (stable sort). Rank info comes from the manager's own state, which
+        # recorded it at start time.
+        def _order(command: cluster_pb2.InstanceCommand) -> tuple[int, int]:
+            info = self._instances.get(command.instance_id) or {}
+            rank = info.get("node_rank") or 0
+            return (0 if command.action == "start" else 1, -rank)
+
+        commands = sorted(commands, key=_order)
         try:
             for command in commands:
                 try:
@@ -208,16 +225,71 @@ class InstanceManager:
 
     def _schedule_pending_probes(self) -> None:
         for instance_id, port in self._pending_probes:
+            info = self._instances.get(instance_id) or {}
+            is_follower = (info.get("node_rank") or 0) > 0
+            if is_follower:
+                # A follower serves no API; in mock mode `statuses()` promotes it after the
+                # mock delay, and only real engines need the container-stability probe.
+                if not self.mock:
+                    self._probe_tasks[instance_id] = asyncio.create_task(
+                        self._follower_probe(instance_id)
+                    )
+                continue
+            if not port or port <= 0:
+                # Nothing to probe: single-node instances always have a port, and a port-less
+                # instance (a multi-node follower, or a mock/error case) has no API to poll.
+                # Connecting to `127.0.0.1:0` used to wedge the event loop on Windows: the
+                # proactor loop's connect timeout does not fire for port 0.
+                continue
             self._probe_tasks[instance_id] = asyncio.create_task(
                 self._health_probe(instance_id, port)
             )
         self._pending_probes.clear()
+
+    async def _follower_probe(self, instance_id: str) -> None:
+        """A follower rank has no API server: it is ready once its container stays up."""
+        ready_after = self.settings.mn_rank_ready_seconds
+        deadline = time.monotonic() + max(ready_after * 4, HEALTH_PROBE_TIMEOUT_SECONDS)
+        stable_since: float | None = None
+        while time.monotonic() < deadline:
+            try:
+                container = await asyncio.to_thread(
+                    self.docker.containers.get, f"{CONTAINER_PREFIX}{instance_id}"
+                )
+                status = getattr(container, "status", "")
+                if status in ("exited", "dead"):
+                    info = self._instances.get(instance_id)
+                    if info is not None:
+                        tail = await asyncio.to_thread(self._container_log_tail, instance_id)
+                        info["state"] = "error"
+                        info["detail"] = tail or f"container {status}"
+                    logger.warning("follower container exited", instance_id=instance_id)
+                    return
+                if status == "running":
+                    if stable_since is None:
+                        stable_since = time.monotonic()
+                    elif time.monotonic() - stable_since >= ready_after:
+                        info = self._instances.get(instance_id)
+                        if info is not None:
+                            info["state"] = "running"
+                            info["detail"] = ""
+                        logger.info("follower rank ready", instance_id=instance_id)
+                        return
+            except Exception:  # noqa: BLE001
+                logger.debug("follower probe retry", instance_id=instance_id)
+            await asyncio.sleep(1)
+        info = self._instances.get(instance_id)
+        if info is not None:
+            info["state"] = "error"
+            info["detail"] = "follower rank did not become ready"
 
     # --- commands (mock) ---
 
     async def _start_mock(self, command: cluster_pb2.InstanceCommand) -> None:
         instance_id = command.instance_id
         config = command.config
+        spec = self._spec_of(command)
+        rank = spec.node_rank if spec is not None else None
         if config.requires_hf_token and not self.settings.hf_token:
             self._instances[instance_id] = {
                 "state": "error",
@@ -225,6 +297,7 @@ class InstanceManager:
                 "detail": "model requires HF token",
                 "started_at": time.monotonic(),
                 "generation": command.generation,
+                "node_rank": rank,
             }
             return
         self._instances[instance_id] = {
@@ -233,12 +306,22 @@ class InstanceManager:
             "detail": "",
             "started_at": time.monotonic(),
             "generation": command.generation,
+            "node_rank": rank,
         }
 
     # --- commands (real, run in a thread) ---
 
+    @staticmethod
+    def _spec_of(command: cluster_pb2.InstanceCommand) -> MultiNodeSpec | None:
+        """Rank topology for a command, or None for single-node instances."""
+        if not command.HasField("config"):
+            return None
+        return MultiNodeSpec.from_config(command.config)
+
+
     def _start_sync(self, command: cluster_pb2.InstanceCommand) -> None:
         instance_id = command.instance_id
+        spec = self._spec_of(command)
         config = command.config
         # Idempotency: skip if already starting/running with same or higher generation
         tracked = self._instances.get(instance_id)
@@ -271,6 +354,12 @@ class InstanceManager:
             return
         try:
             docker_client = self.docker
+            # A restart replaces the container: the previous probe (if any) is polling a
+            # container that will not exist anymore. Without this it leaks for the whole probe
+            # deadline and keeps connecting to a dead port.
+            stale_probe = self._probe_tasks.pop(instance_id, None)
+            if stale_probe is not None:
+                stale_probe.cancel()
             image = image_for(config.engine, self.settings)
             if image not in self._pulled_images:
                 logger.info("pulling engine image", image=image)
@@ -292,6 +381,14 @@ class InstanceManager:
             environment = {}
             if self.settings.hf_token:
                 environment["HF_HUB_TOKEN"] = self.settings.hf_token
+            if spec is not None:
+                environment.update(
+                    multi_node_env(spec, self.settings.worker_hostname, self.settings.netif)
+                )
+                for entry in config.rendezvous.env:
+                    key, _, value = entry.partition("=")
+                    if key:
+                        environment[key] = value
             labels = {
                 LABEL_MANAGED: "true",
                 LABEL_INSTANCE_ID: instance_id,
@@ -309,7 +406,11 @@ class InstanceManager:
                         capabilities=[["gpu"]],
                     )
                 ],
-                ports={"8000/tcp": config.port},
+                # Multi-node containers run with host networking: NCCL opens peer connections
+                # that NAT/port-mapping breaks, and a follower must not publish a port at all
+                # (docker-py rejects ports= together with host networking anyway).
+                network_mode="host" if spec is not None else None,
+                ports=None if spec is not None else {"8000/tcp": config.port},
                 environment=environment,
                 volumes={
                     self.settings.models_dir: {
@@ -317,7 +418,7 @@ class InstanceManager:
                         "mode": "rw",
                     }
                 },
-                command=build_command(config),
+                command=build_command(config, spec, serve_port=config.port),
             )
             container.start()
             self._instances[instance_id] = {
@@ -326,6 +427,7 @@ class InstanceManager:
                 "detail": "",
                 "started_at": time.monotonic(),
                 "generation": command.generation,
+                "node_rank": spec.node_rank if spec is not None else None,
             }
             self._pending_probes.append((instance_id, config.port))
             logger.info("instance started", instance_id=instance_id, port=config.port)
@@ -412,8 +514,13 @@ class InstanceManager:
                 except Exception:
                     pass
             try:
-                async with httpx.AsyncClient(timeout=5) as client:
-                    response = await client.get(url)
+                async with httpx.AsyncClient(timeout=PROBE_ATTEMPT_TIMEOUT_SECONDS) as client:
+                    # `wait_for` guarantees the attempt returns control: on Windows the proactor
+                    # loop can otherwise sit in `finish_connect` for a port nobody listens on and
+                    # wedge the probe (and anything awaiting it, including shutdown).
+                    response = await asyncio.wait_for(
+                        client.get(url), timeout=PROBE_ATTEMPT_TIMEOUT_SECONDS
+                    )
                 if response.status_code == 200:
                     info = self._instances.get(instance_id)
                     if info is not None:
@@ -421,7 +528,7 @@ class InstanceManager:
                         info["detail"] = ""
                     logger.info("instance healthy", instance_id=instance_id, port=port)
                     return
-            except httpx.HTTPError:
+            except (httpx.HTTPError, TimeoutError):
                 pass
             # second check after request
             if not self.mock:
