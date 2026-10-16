@@ -44,7 +44,7 @@ test("scale deployment group up and down, then delete it", async ({ page }) => {
   await expect(page).toHaveURL(/\/instances$/, { timeout: 30000 });
 
   const group = page.locator('tbody[data-testid^="deployment-group-"]', { hasText: MODEL });
-  const badge = group.locator("tr").first().getByText(/^\d+\/\d+ running$/);
+  const badge = group.locator("tr").first().getByText(/^\d+\/\d+ \(\d+(–\d+)?\) running$/);
   const rows = group.locator('tr[data-testid^="instance-row-"]');
   await expect(rows).toHaveCount(1);
   await expect(badge).toHaveText("1/1 (1) running", { timeout: 90000 });

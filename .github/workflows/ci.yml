@@ -134,14 +134,21 @@ jobs:
           python3 - <<'PY' >> "$GITHUB_ENV"
           import json, time, urllib.request
           B = "http://localhost:8000/api/v1"
-          def call(method, path, body=None, token=None):
+          def call(method, path, body=None, token=None, with_status=False):
               data = json.dumps(body).encode() if body is not None else None
               r = urllib.request.Request(B + path, method=method, data=data)
               if data: r.add_header("Content-Type", "application/json")
               if token: r.add_header("Authorization", "Bearer " + token)
-              with urllib.request.urlopen(r) as resp:
-                  raw = resp.read()
-                  return json.loads(raw) if raw else None
+              try:
+                  with urllib.request.urlopen(r) as resp:
+                      raw = resp.read()
+                      payload = json.loads(raw) if raw else None
+                      return (resp.status, payload) if with_status else payload
+              except urllib.error.HTTPError as exc:
+                  body_text = exc.read().decode()
+                  if with_status:
+                      return exc.code, body_text[:300]
+                  raise SystemExit(f"{method} {path} -> {exc.code}: {body_text[:300]}") from None
           token = call("POST", "/auth/login", {"username": "admin", "password": "inferna"})["access_token"]
           for _ in range(30):
               workers = call("GET", "/workers", token=token)
@@ -151,16 +158,20 @@ jobs:
               time.sleep(5)
           else:
               raise SystemExit("no worker connected within 150 s")
-          model = call("GET", "/models", token=token)[0]
+          # The smallest catalog entry: the mock GPU is 24 GB and a large model would be refused
+          # with "no worker has enough free vram", which says nothing about what is being tested.
+          model = min(call("GET", "/models", token=token),
+                      key=lambda entry: entry["vram_required_mb"])
           key = call("POST", "/keys", {"name": "ci-usage"}, token=token)["key"]
           clusters = call("GET", "/clusters", token=token)
           cluster = (clusters if isinstance(clusters, list) else clusters["items"])[0]
-          created = call("POST", "/model-instances", {"model_id": model["id"],
-                                                      "cluster_id": cluster["id"], "engine": "vllm",
-                                                      "profile": "latency", "replicas": 1,
-                                                      "gpu_selection": "auto"}, token=token)
-          if not created:
-              raise SystemExit("deploy did not return an instance")
+          status, created = call("POST", "/model-instances", {"model_id": model["id"],
+                                                              "cluster_id": cluster["id"],
+                                                              "engine": "vllm", "profile": "latency",
+                                                              "replicas": 1, "gpu_selection": "auto"},
+                                 token=token, with_status=True)
+          if not created or status >= 400:
+              raise SystemExit(f"deploy failed with {status}: {created}")
           time.sleep(25)  # let the worker sync the instance to running
           print(f"INFERNA_JWT={token}")
           print(f"INFERNA_MODEL={model['name']}")
