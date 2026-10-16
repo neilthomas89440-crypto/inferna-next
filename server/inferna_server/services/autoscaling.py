@@ -213,8 +213,13 @@ async def autoscale_tick(
         units = _unit_count(deployment)
         signal = read_signal(deployment, list(deployment.instances))
         target = desired_replicas(current=units, window=window, signal=signal, settings=settings)
-        last = cooldown.get(deployment.id, 0.0)
-        if target == units or now - last < settings.autoscale_cooldown_seconds:
+        # No previous action means no cooldown. Comparing against a default of 0.0 would suppress
+        # every action on a machine whose monotonic clock has not passed the cooldown yet — which
+        # is exactly what a fresh CI container looks like.
+        last = cooldown.get(deployment.id)
+        if target == units or (
+            last is not None and now - last < settings.autoscale_cooldown_seconds
+        ):
             inferna_autoscale_actions_total.labels(str(deployment.id), "none").inc()
             continue
         action = "up" if target > units else "down"

@@ -167,6 +167,22 @@ async def test_tick_scales_up_when_the_signal_is_hot(db, monkeypatch) -> None:
     assert len(deployment.instances) == 2
 
 
+async def test_tick_acts_on_a_fresh_clock(db, monkeypatch) -> None:
+    """Regression: a container whose monotonic clock is younger than the cooldown must still act.
+
+    The tick used `cooldown.get(id, 0.0)` and compared `now - 0.0 >= cooldown`, so on a machine
+    with less than 300 s of uptime every action was suppressed (green locally, red in CI).
+    """
+    await _deployment(db, replicas=1)
+    monkeypatch.setattr(
+        autoscaling, "read_signal", lambda deployment, instances: _signal(ttft_p95_ms=5000.0)
+    )
+
+    actions = await autoscaling.autoscale_tick(db, {}, now=0.5)
+
+    assert len(actions) == 1
+
+
 async def test_tick_respects_the_cooldown(db, monkeypatch) -> None:
     deployment = await _deployment(db, replicas=1)
     monkeypatch.setattr(
