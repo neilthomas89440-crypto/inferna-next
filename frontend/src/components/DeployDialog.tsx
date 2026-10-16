@@ -20,6 +20,8 @@ export default function DeployDialog({ model, onClose }: DeployDialogProps) {
   const [workerId, setWorkerId] = useState("");
   const [gpuIndexes, setGpuIndexes] = useState<number[]>([]);
   const [replicas, setReplicas] = useState(1);
+  const [nodesPerReplica, setNodesPerReplica] = useState(1);
+  const [parallelMode, setParallelMode] = useState<"pp" | "tp" | "dp">("pp");
   const [error, setError] = useState<string | null>(null);
 
   const workers = useWorkers(clusterId || undefined);
@@ -58,12 +60,24 @@ export default function DeployDialog({ model, onClose }: DeployDialogProps) {
       setError("No engine available for this model");
       return;
     }
+    if (nodesPerReplica > 1 && mode === "manual") {
+      setError("Multi-node deploys use automatic placement");
+      return;
+    }
     if (mode === "manual" && gpuIndexes.length === 0) {
       setError("Select at least one GPU");
       return;
     }
     if (!Number.isInteger(replicas) || replicas < 1 || replicas > 8) {
       setError("Replicas must be an integer between 1 and 8");
+      return;
+    }
+    if (!Number.isInteger(nodesPerReplica) || nodesPerReplica < 1 || nodesPerReplica > 8) {
+      setError("Nodes per replica must be an integer between 1 and 8");
+      return;
+    }
+    if (nodesPerReplica > 1 && replicas !== 1) {
+      setError("Multi-node supports one replica group for now");
       return;
     }
     try {
@@ -75,6 +89,9 @@ export default function DeployDialog({ model, onClose }: DeployDialogProps) {
         replicas,
         gpu_selection:
           mode === "manual" ? { worker_id: workerId, gpu_indexes: gpuIndexes } : "auto",
+        // A group places one rank per host; `parallel_mode` tells each rank how to join.
+        nodes_per_replica: nodesPerReplica,
+        parallel_mode: nodesPerReplica > 1 ? parallelMode : "single",
       });
       onClose();
       navigate("/instances");
@@ -152,17 +169,59 @@ export default function DeployDialog({ model, onClose }: DeployDialogProps) {
           </fieldset>
 
           {mode !== "manual" && (
-            <label className="block text-sm">
-              <span className="font-medium text-slate-700">Replicas</span>
-              <input
-                type="number"
-                min={1}
-                max={8}
-                value={replicas}
-                onChange={(e) => setReplicas(Number(e.target.value))}
-                className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-              />
-            </label>
+            <div className="grid grid-cols-2 gap-3">
+              <label className="block text-sm">
+                <span className="font-medium text-slate-700">Replicas</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={8}
+                  value={replicas}
+                  onChange={(e) => setReplicas(Number(e.target.value))}
+                  className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                />
+              </label>
+              <label className="block text-sm">
+                <span className="font-medium text-slate-700">Nodes per replica</span>
+                <input
+                  id="nodes-per-replica"
+                  type="number"
+                  min={1}
+                  max={8}
+                  value={nodesPerReplica}
+                  onChange={(e) => setNodesPerReplica(Number(e.target.value))}
+                  className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                />
+                <span className="mt-1 block text-xs text-slate-400">
+                  1 = single node. Above 1 the platform places one rank per host.
+                </span>
+              </label>
+            </div>
+          )}
+
+          {mode !== "manual" && nodesPerReplica > 1 && (
+            <fieldset>
+              <legend className="text-sm font-medium text-slate-700">Parallel mode</legend>
+              <div className="mt-1 flex gap-4">
+                {(["pp", "tp", "dp"] as const).map((value) => (
+                  <label key={value} className="flex items-center gap-2 text-sm">
+                    <input
+                      type="radio"
+                      name="parallel-mode"
+                      checked={parallelMode === value}
+                      onChange={() => setParallelMode(value)}
+                      className="accent-indigo-600"
+                    />
+                    {value}
+                  </label>
+                ))}
+              </div>
+              <p className="mt-1 text-xs text-slate-400">
+                pp splits layers across hosts (see docs/network-matrix.md for the latency envelope);
+                tp splits every layer (intra-host interconnect territory); dp runs independent
+                replicas with no cross-rank traffic.
+              </p>
+            </fieldset>
           )}
           <fieldset>
             <legend className="text-sm font-medium text-slate-700">GPU selection</legend>

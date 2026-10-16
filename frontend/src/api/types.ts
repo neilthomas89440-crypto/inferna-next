@@ -80,6 +80,13 @@ export interface Instance {
   model: ModelInfo | null;
   worker_name: string | null;
   deployment_id: string;
+  // Parallel group (multi-node): every rank of one replica shares these. `port` is set on the
+  // head only, and `rendezvous` is the head's "host:port" that the followers dial.
+  parallel_group_id: string | null;
+  node_rank: number | null;
+  world_size: number | null;
+  parallel_mode: string | null;
+  rendezvous: string | null;
 }
 
 export interface InstanceLogs {
@@ -126,6 +133,9 @@ export interface DeployRequest {
   profile: Profile;
   gpu_selection: "auto" | ManualGpuSelection;
   replicas?: number;
+  // Multi-node: one replica is a group of `nodes_per_replica` hosts, one rank each.
+  nodes_per_replica?: number;
+  parallel_mode?: "single" | "dp" | "pp" | "tp" | "pd";
 }
 
 export interface Deployment {

@@ -136,7 +136,51 @@ test("submits a deploy request and closes the dialog", async () => {
     profile: "latency",
     gpu_selection: "auto",
     replicas: 1,
+    // Single-node stays the default and stays explicit: the server treats "single" as the
+    // pre-multi-node contract.
+    nodes_per_replica: 1,
+    parallel_mode: "single",
   });
+});
+
+test("multi-node deploy sends nodes per replica and the parallel mode", async () => {
+  const fetchMock = apiStub();
+  vi.stubGlobal("fetch", fetchMock);
+  const onClose = vi.fn();
+
+  renderDialog(onClose);
+  await waitFor(() => expect(screen.getByLabelText("Cluster")).toHaveValue("c1"));
+
+  fireEvent.change(screen.getByLabelText(/Nodes per replica/), { target: { value: "2" } });
+  // The mode selector only exists once more than one node is involved.
+  fireEvent.click(screen.getByRole("radio", { name: "tp" }));
+  fireEvent.submit(document.querySelector("form")!);
+
+  await waitFor(() => expect(onClose).toHaveBeenCalled());
+  const deployCall = fetchMock.mock.calls.find(([url, init]) =>
+    String(url).includes("/model-instances") && (init as RequestInit | undefined)?.method === "POST",
+  );
+  const body = JSON.parse((deployCall![1] as RequestInit).body as string);
+  expect(body.nodes_per_replica).toBe(2);
+  expect(body.parallel_mode).toBe("tp");
+});
+
+test("multi-node refuses a manual placement before calling the API", async () => {
+  const fetchMock = apiStub();
+  vi.stubGlobal("fetch", fetchMock);
+  const onClose = vi.fn();
+
+  renderDialog(onClose);
+  await waitFor(() => expect(screen.getByLabelText("Cluster")).toHaveValue("c1"));
+
+  fireEvent.change(screen.getByLabelText(/Nodes per replica/), { target: { value: "2" } });
+  fireEvent.click(screen.getByRole("radio", { name: "Manual" }));
+  fireEvent.submit(document.querySelector("form")!);
+
+  await waitFor(() =>
+    expect(screen.getByText("Multi-node deploys use automatic placement")).toBeInTheDocument(),
+  );
+  expect(onClose).not.toHaveBeenCalled();
 });
 
 test("shows server error detail inline when deploy fails", async () => {
