@@ -26,6 +26,11 @@ class Settings(BaseSettings):
     # Identity the server keys workers by. Defaults to the machine name; override it to run
     # more than one worker process on one host (local multi-node stacks, tests).
     worker_hostname: str = Field(default_factory=platform.node)
+    # TLS to the server's gRPC endpoint: the CA that signs the server certificate (empty means
+    # plaintext, the documented private-network default) and the name to verify against when the
+    # certificate is issued for a host the worker cannot resolve (e.g. an overlay network).
+    server_tls_ca: str = ""
+    server_tls_authority: str = ""
     # Multi-node followers have no API server: they count as ready once their container
     # stays up this long.
     mn_rank_ready_seconds: float = 20.0

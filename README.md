@@ -269,6 +269,39 @@ Executable plans for the remaining work live in [`docs/roadmap/plans/`](docs/roa
 - [Phase-0 validation](docs/phase0-validation.md) — what was observed on real hardware
 - [OpenAPI spec](docs/openapi.yaml) — regenerated via `scripts/export-openapi.py`
 
+## Reproducing the release checks
+
+The stage-7 gates are scripted, so a clean machine can reproduce them rather than trust a report:
+
+```bash
+# latency/throughput of one configuration, and the parity verdict against a saved baseline
+scripts/parity.sh --mode smoke  --api http://localhost:9200 --api-key k --model fake-model \
+                  --environment fake-upstream            # harness check, any machine
+scripts/parity.sh --mode single --admin-token "$JWT" --api-key "$KEY" --model <model> --gpus 8 \
+                  --environment hardware --baseline artifacts/parity-baseline.jsonl
+
+# coding help: correctness + latency for the same model
+scripts/coding-validation.sh --api http://server:8000 --api-key "$KEY" --model <model> \
+                             --environment hardware
+
+# 24 h multi-node lifecycle soak with rotating faults
+INFERNA_API=http://server:8000 INFERNA_ADMIN_TOKEN="$JWT" scripts/soak-multinode.sh --docker
+
+# usage aggregates must agree with the gateway counters
+python scripts/usage-reconcile.py --api http://server:8000 --token "$JWT" --days 1 \
+       --traffic-cmd "bash scripts/bench.sh --api http://server:8000 --api-key $KEY --model <model> \
+                      --scenario single --repeats 5 --warmup 1"
+```
+
+`scripts/parity.sh` and the soak exit non-zero when a threshold is missed, and every report records
+the **environment** it was measured in — a fixture or mock stack is labelled a harness check, never a
+verdict.
+
+**Not yet reproducible here** (recorded as `BLOCKED` in the evidence files, with the exact commands):
+the hardware half of the multi-node gates (two or more GPU hosts), filling `docs/engine-matrix.md`
+and `docs/phase0-validation.md`, and therefore the `v1.0` tag itself. See
+[Roadmap](#roadmap) and [CHANGELOG.md](CHANGELOG.md) for the current state.
+
 ## Contributing
 
 PRs are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the dev loop, the gates CI enforces,

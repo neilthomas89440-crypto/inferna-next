@@ -35,6 +35,22 @@ def configure_logging(level: str) -> None:
     )
 
 
+def _channel_for(settings: Settings) -> grpc.aio.Channel:
+    """Plaintext by default (the documented private-network assumption), TLS when a CA is set.
+
+    The CA file is what makes the worker verify the server; `server_tls_authority` only overrides
+    the name it checks when the certificate is issued for a host the worker cannot resolve.
+    """
+    if not settings.server_tls_ca:
+        return grpc.aio.insecure_channel(settings.server_url)
+    with open(settings.server_tls_ca, "rb") as ca_file:
+        credentials = grpc.ssl_channel_credentials(root_certificates=ca_file.read())
+    options = []
+    if settings.server_tls_authority:
+        options.append(("grpc.ssl_target_name_override", settings.server_tls_authority))
+    return grpc.aio.secure_channel(settings.server_url, credentials, options=options)
+
+
 def system_info(settings: Settings) -> cluster_pb2.SystemInfo:
     return cluster_pb2.SystemInfo(
         cpu_cores=psutil.cpu_count(logical=True) or 0,
@@ -61,7 +77,7 @@ def gpu_infos(gpus) -> list[cluster_pb2.GPUInfo]:
 
 
 async def run_loop(settings, manager: InstanceManager) -> None:
-    channel = grpc.aio.insecure_channel(settings.server_url)
+    channel = _channel_for(settings)
     stub = cluster_pb2_grpc.WorkerServiceStub(channel)
     try:
         # --- register (with backoff) ---
