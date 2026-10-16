@@ -26,6 +26,9 @@ test-results/
 artifacts/
 bench-out/
 
+# Ad-hoc run logs captured while iterating (never part of a change)
+*.log
+
 # Models
 models/
 

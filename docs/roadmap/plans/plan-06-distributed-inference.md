@@ -376,13 +376,23 @@ netem loss 5 % mid-generation, рестарт сервера во время д�
 `manager.adopt_existing:69-134`). `scripts/soak-multinode.sh` — 24 ч с рандомизированными сбоями по
 образцу `scripts/soak.sh` (JSONL в `artifacts/`).
 
-**`w4/diagnostics`** (владеет `proto/cluster.proto` — RPC логов, `grpc_server.py`,
-`services/logs.py`, `api/diagnostics.py`):
-`rpc GetLogs(GetLogsRequest{instance_id, tail_lines}) returns (GetLogsResponse{lines})`; per-rank
-логи и lifecycle-события в UI; `/readyz` дополнительно учитывает состояние БД, актуальность
-миграций и bind gRPC (`main.py:56-92` readiness_loop — расширить, не ломая `/healthz`).
-Зависит от направления `04` (план `plan-04-instance-logs.md`): переиспользовать
-`ModelInstance.log_tail` и `GET /api/v1/model-instances/{id}/logs` как базу, добавляя per-rank.
+**`w4/diagnostics`** (владеет `services/logs.py`, `api/instances.py` — логи, `api/diagnostics.py`):
+per-rank логи поверх направления `04` (каждый ранг — своя строка `ModelInstance`, поэтому
+`ModelInstance.log_tail` + `GET /api/v1/model-instances/{id}/logs` уже дают логи по рангам) и
+он-деманд обновление внутри pull-модели: `?live=true` ждёт следующий Sync (до 12 с) и отдаёт
+`stale=true`, если не дождался, `?lines=N` (1..1000) режет хвост.
+
+**Отклонение от первой редакции этого пункта**: `rpc GetLogs` (server → worker) **не делаем**.
+Он требует входящего доступа к GPU-хостам и противоречит инварианту §3.1 (control plane
+pull-based) и порт-матрице M3, где явно записано «worker → server, входящий доступ не нужен»
+(`docs/network-matrix.md`). Per-rank логи приходят с Sync, а `?live=true` — это ожидание
+следующего Sync, а не RPC.
+
+`/readyz` уже проверяет БД, актуальность миграций и готовность gRPC (`main.py:57-86`,
+`readiness_loop`) — проверено чтением, дублировать не нужно.
+
+Lifecycle-события (история переходов) отложены: под них нужна отдельная таблица, и ни один гейт
+их не требует; причина падения ранга уже видна через `error_detail` + логи.
 
 **`w3/frontend-parallel`** (владеет `frontend/**`):
 в `/instances` группа отображает узлы/ранги/rendezvous; Endpoint-модал только у головы

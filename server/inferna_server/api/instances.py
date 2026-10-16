@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
+import time
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,14 +14,30 @@ from sqlalchemy.orm import selectinload
 
 from inferna_server.auth import get_current_user
 from inferna_server.db import get_db
-from inferna_server.models import Cluster, Deployment, Model, ModelInstance, User
+from inferna_server.models import (
+    Cluster,
+    Deployment,
+    Model,
+    ModelInstance,
+    User,
+    Worker,
+    as_aware_utc,
+)
 from inferna_server.schemas import DeployRequest, InstanceLogsOut, InstanceOut, ManualGpuSelection
+from inferna_server.services.logs import tail_lines
 from inferna_server.services.scheduler import (
     allocate_manual,
     allocate_parallel_replicas,
     allocate_replicas,
     rendezvous_host,
 )
+
+# The worker polls every ~5 s, so a bounded wait of a few intervals is what "live" can mean in a
+# pull-based control plane.
+LIVE_LOG_WAIT_SECONDS = 12.0
+LIVE_LOG_POLL_SECONDS = 0.5
+LIVE_LOG_DEFAULT_LINES = 100
+LIVE_LOG_MAX_LINES = 1000
 
 router = APIRouter(prefix="/model-instances", tags=["instances"])
 
@@ -247,18 +265,54 @@ async def delete_instance(
 @router.get("/{instance_id}/logs", response_model=InstanceLogsOut)
 async def instance_logs(
     instance_id: uuid.UUID,
+    live: bool = Query(default=False, description="wait for the worker's next Sync first"),
+    lines: int = Query(default=LIVE_LOG_DEFAULT_LINES, ge=1, le=LIVE_LOG_MAX_LINES),
     _: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> InstanceLogsOut:
-    """Last log snapshot the worker reported for this instance (no streaming)."""
+    """The worker's last log snapshot for this instance.
+
+    With `live=true` the endpoint waits (bounded) for the next Sync, because the control plane is
+    pull-based and the server never dials a GPU host — a follower rank needs no inbound access
+    either (see docs/network-matrix.md). `stale=true` means the wait expired and the answer is the
+    previous snapshot rather than a failure: a five-second-old log tail is still useful.
+    """
     instance = (
         await db.execute(select(ModelInstance).where(ModelInstance.id == instance_id))
     ).scalar_one_or_none()
     if instance is None:
         raise HTTPException(status_code=404, detail="instance not found")
+
+    # Freshness is measured on the *worker's* heartbeat, not on `updated_at`: a Sync that changes
+    # nothing legitimately leaves the row untouched, so "has the worker reported since you asked?"
+    # is the honest question. The tail itself is written by that Sync when it changed.
+    stale = False
+    if live:
+        worker = (
+            await db.execute(select(Worker).where(Worker.id == instance.worker_id))
+        ).scalar_one_or_none()
+        if worker is None:
+            # An instance without a registered worker cannot be refreshed: say so rather than
+            # pretending the snapshot is live.
+            stale = True
+        else:
+            seen_before = as_aware_utc(worker.last_seen_at) if worker.last_seen_at else None
+            deadline = time.monotonic() + LIVE_LOG_WAIT_SECONDS
+            while time.monotonic() < deadline:
+                await asyncio.sleep(LIVE_LOG_POLL_SECONDS)
+                await db.refresh(worker)
+                seen_now = as_aware_utc(worker.last_seen_at) if worker.last_seen_at else None
+                if seen_now is not None and (seen_before is None or seen_now > seen_before):
+                    break
+            else:
+                stale = True
+        await db.refresh(instance)
+
     return InstanceLogsOut(
         instance_id=instance.id,
         state=instance.state,
-        log_tail=instance.log_tail,
+        log_tail=tail_lines(instance.log_tail, lines),
         updated_at=instance.updated_at,
+        stale=stale,
+        lines=lines,
     )
