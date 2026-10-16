@@ -15,7 +15,7 @@ from inferna_server.auth import get_current_user
 from inferna_server.db import get_db
 from inferna_server.models import Deployment, ModelInstance, User
 from inferna_server.schemas import DeploymentOut, DeploymentRange, ScaleRequest
-from inferna_server.services.scaling import apply_scale
+from inferna_server.services.scaling import apply_scale, replica_unit_count
 
 router = APIRouter(prefix="/deployments", tags=["deployments"])
 
@@ -96,7 +96,8 @@ async def set_deployment_range(
 
     deployment.min_replicas = body.min_replicas
     deployment.max_replicas = body.max_replicas
-    current = len(deployment.instances)
+    # Units, not rows: one parallel group is one replica (a two-rank group is not "2 replicas").
+    current = replica_unit_count(deployment)
     try:
         # set_range=False keeps the window we just wrote and only clamps the count into it.
         await apply_scale(db, deployment, max(body.min_replicas, min(body.max_replicas, current)),
