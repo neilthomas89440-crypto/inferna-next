@@ -260,6 +260,7 @@ Executable plans for the remaining work live in [`docs/roadmap/plans/`](docs/roa
 
 - [Product spec](docs/PRODUCT_SPEC.md) — one-prompt source of truth and scope decisions
 - [Architecture](docs/architecture.md) — data flow, ports, directory layout
+- [Network matrix](docs/network-matrix.md) — port contract, three-worker topology, wide-area envelopes
 - [Roadmap](docs/roadmap/README.md) — stages, acceptance criteria, release contract
 - [Implementation plans](docs/roadmap/plans/README.md) — executable plans per remaining stage
 - [Engine matrix](docs/engine-matrix.md) — verified engine × image × GPU combinations
