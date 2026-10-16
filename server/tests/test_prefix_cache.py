@@ -55,15 +55,27 @@ def test_overlap_counts_the_leading_run_only() -> None:
     assert index.overlap(uuid.uuid4(), ["a"]) == 0
 
 
-def test_residency_expires_and_the_ring_is_bounded() -> None:
-    index = PrefixCacheIndex(ttl_seconds=0.0, max_per_instance=2)
+def test_residency_expires_by_ttl() -> None:
+    """A fake clock, because `time.monotonic()` granularity is ~15.6 ms on Windows."""
+    now = [1_000.0]
+    index = PrefixCacheIndex(ttl_seconds=1.0, clock=lambda: now[0])
+    instance = uuid.uuid4()
+    index.record(instance, ["a"])
+
+    assert index.overlap(instance, ["a"]) == 1
+    now[0] += 1.5  # past the TTL
+
+    assert index.overlap(instance, ["a"]) == 0
+
+
+def test_ring_evicts_the_oldest_prefixes() -> None:
+    index = PrefixCacheIndex(ttl_seconds=60.0, max_per_instance=2)
     instance = uuid.uuid4()
     for block in ("a", "b", "c"):
         index.record(instance, [block])
 
-    assert index.overlap(instance, ["a"]) == 0  # ttl 0: everything is stale by now
-    index.ttl_seconds = 60.0
-    assert index.overlap(instance, ["a"]) == 0  # evicted by the ring (max 2)
+    assert index.overlap(instance, ["a"]) == 0  # pushed out by the ring (max 2)
+    assert index.overlap(instance, ["b"]) == 1
     assert index.overlap(instance, ["c"]) == 1
 
 

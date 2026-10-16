@@ -24,13 +24,13 @@ serve the model, and a replica that stopped is simply not in the candidate set.
 |---|---|
 | `cd server && uv run ruff check .` | `All checks passed!` |
 | `cd server && uv run pyright` | `0 errors, 0 warnings, 0 informations` |
-| `cd server && uv run pytest -q` | 240 passed, 2 skipped (232 + 8 new; three balancing assertions were made prefix-neutral, see below) |
+| `cd server && uv run pytest -q` | 241 passed, 2 skipped (232 + 9 new; three balancing assertions were made prefix-neutral, see below) |
 | `cd server && uv run python ../scripts/export-openapi.py --check` | untouched (no schema change) |
 | M5 hardware gate (same replica ≥ 90 %, TTFT repeat ≤ 60 % of cold) | **BLOCKED: no GPU hosts** — needs the M4 parity run; the local proof is the routing test below |
 
-New tests (`server/tests/test_prefix_cache.py`, 8): chained digests are deterministic and share
+New tests (`server/tests/test_prefix_cache.py`, 9): chained digests are deterministic and share
 leading blocks for a shared prefix; `prompt_text` flattens roles and content parts; overlap counts
-the leading run only; residency expires by TTL and is bounded by the ring; hit ratio is `None` until
+the leading run only; residency expires by TTL (with an injectable clock, because `time.monotonic()` resolution is ~15.6 ms on Windows) and is bounded by the ring; hit ratio is `None` until
 something is looked up; **the replica holding the prefix wins even when both are idle**; the same
 request falls back to plain balancing when that replica is down; and a follower with the resident
 prefix is still skipped in favour of the head.

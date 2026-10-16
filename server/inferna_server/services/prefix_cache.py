@@ -17,6 +17,7 @@ import hashlib
 import time
 import uuid
 from collections import deque
+from collections.abc import Callable
 
 # Blocks are hashed in whole units so two prompts that share a prefix share hashes. ~4 chars per
 # token for English; the exact size only has to be stable, not exact.
@@ -76,9 +77,13 @@ class PrefixCacheIndex:
         *,
         ttl_seconds: float = PREFIX_TTL_SECONDS,
         max_per_instance: int = MAX_PREFIXES_PER_INSTANCE,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.ttl_seconds = ttl_seconds
         self.max_per_instance = max_per_instance
+        # Injectable clock: expiry logic must be testable without sleeping, and `time.monotonic`
+        # granularity is ~15.6 ms on Windows, which makes short TTLs untestable otherwise.
+        self._clock = clock
         self._seen: dict[uuid.UUID | str, deque[tuple[float, frozenset[str]]]] = {}
         self.matches = 0
         self.lookups = 0
@@ -88,7 +93,7 @@ class PrefixCacheIndex:
         if not digests:
             return
         ring = self._seen.setdefault(instance_id, deque(maxlen=self.max_per_instance))
-        ring.append((time.monotonic(), frozenset(digests)))
+        ring.append((self._clock(), frozenset(digests)))
 
     def overlap(self, instance_id: uuid.UUID | str, digests: list[str]) -> int:
         """Longest shared prefix *length in blocks* with what this instance recently served.
@@ -142,7 +147,7 @@ class PrefixCacheIndex:
         self._seen.pop(instance_id, None)
 
     def _expire(self, ring: deque[tuple[float, frozenset[str]]]) -> None:
-        cutoff = time.monotonic() - self.ttl_seconds
+        cutoff = self._clock() - self.ttl_seconds
         while ring and ring[0][0] < cutoff:
             ring.popleft()
 
