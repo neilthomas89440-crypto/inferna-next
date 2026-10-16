@@ -128,6 +128,8 @@ jobs:
       - name: Deploy a model and create a key
         # The gateway needs a live instance and a key; the mock worker has no engine, so the calls
         # below answer 502 - which must still be *counted* (that is what the reconciliation checks).
+        # The deploy also needs a *connected* worker, and the worker registers after the server is
+        # up, so the script waits for one instead of racing it (a 400 here means "no worker yet").
         run: |
           python3 - <<'PY' >> "$GITHUB_ENV"
           import json, time, urllib.request
@@ -141,13 +143,24 @@ jobs:
                   raw = resp.read()
                   return json.loads(raw) if raw else None
           token = call("POST", "/auth/login", {"username": "admin", "password": "inferna"})["access_token"]
+          for _ in range(30):
+              workers = call("GET", "/workers", token=token)
+              rows = workers if isinstance(workers, list) else workers.get("items", [])
+              if any(row.get("state") == "connected" for row in rows):
+                  break
+              time.sleep(5)
+          else:
+              raise SystemExit("no worker connected within 150 s")
           model = call("GET", "/models", token=token)[0]
           key = call("POST", "/keys", {"name": "ci-usage"}, token=token)["key"]
           clusters = call("GET", "/clusters", token=token)
           cluster = (clusters if isinstance(clusters, list) else clusters["items"])[0]
-          call("POST", "/model-instances", {"model_id": model["id"], "cluster_id": cluster["id"],
-                                            "engine": "vllm", "profile": "latency", "replicas": 1,
-                                            "gpu_selection": "auto"}, token=token)
+          created = call("POST", "/model-instances", {"model_id": model["id"],
+                                                      "cluster_id": cluster["id"], "engine": "vllm",
+                                                      "profile": "latency", "replicas": 1,
+                                                      "gpu_selection": "auto"}, token=token)
+          if not created:
+              raise SystemExit("deploy did not return an instance")
           time.sleep(25)  # let the worker sync the instance to running
           print(f"INFERNA_JWT={token}")
           print(f"INFERNA_MODEL={model['name']}")
