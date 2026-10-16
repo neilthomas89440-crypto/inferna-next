@@ -110,6 +110,28 @@ jobs:
         working-directory: frontend
         run: npx vitest run
 
+  coding-validation-mock:
+    runs-on: ubuntu-latest
+    needs: [backend]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+      - name: Install the harness
+        working-directory: bench
+        run: uv sync --dev
+      - name: Coding validation harness check
+        # The fixture and the runner share one step so the background server lives for the whole
+        # check. It exercises the CLI, the checks, the JSONL and the render path — the answers of
+        # a fixture are not asserted (that is what --smoke means).
+        run: |
+          ( cd bench && uv run python -m bench.fake_upstream --port 9200 --chunks 6 --delay 0.005 --no-auth ) &
+          for i in $(seq 1 30); do
+            if (exec 3<>/dev/tcp/127.0.0.1/9200) 2>/dev/null; then break; fi
+            sleep 1
+          done
+          bash scripts/coding-validation.sh --api http://127.0.0.1:9200 --api-key ci \
+            --model fake-model --environment fake-upstream --smoke --out artifacts/coding-ci.jsonl
+
   e2e:
     runs-on: ubuntu-latest
     needs: [backend, frontend]

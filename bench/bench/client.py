@@ -18,6 +18,9 @@ class RequestResult:
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     content_chunks: int = 0
+    # Collected answer text: the coding validation scores the *same* response it measured
+    # (asking twice would measure one answer and grade another).
+    content: str = ""
     error: str | None = None
 
     @property
@@ -85,6 +88,7 @@ async def chat(
     last_content_at: float | None = None
     itl: list[float] = []
     content_chunks = 0
+    collected: list[str] = []
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
 
@@ -124,6 +128,7 @@ async def chat(
                     itl.append((now - last_content_at) * 1000)
                 last_content_at = now
                 content_chunks += 1
+                collected.append(text)
     except httpx.HTTPError as exc:
         return RequestResult(
             status=0,
@@ -141,4 +146,5 @@ async def chat(
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
         content_chunks=content_chunks,
+        content="".join(collected),
     )

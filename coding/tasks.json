@@ -1,0 +1,99 @@
+{
+  "version": 1,
+  "description": "Deterministic coding tasks used by scripts/coding-validation.sh. Every check is a pure function of the model's answer, so a run is reproducible and costs no sandbox: text checks by default, pytest execution only when explicitly enabled.",
+  "tasks": [
+    {
+      "id": "gen-func-body",
+      "title": "Generate a function body",
+      "prompt": "Return ONLY the body of a Python function `def clamp(value, low, high):` that returns `low` when value < low, `high` when value > high, otherwise value. No prose, no markdown fences, no `def` line.",
+      "check": {"kind": "contains_all", "needles": ["if value < low", "low", "if value > high"], "forbid": ["```", "def clamp"]},
+      "max_tokens": 160
+    },
+    {
+      "id": "fix-off-by-one",
+      "title": "Explain and fix an off-by-one",
+      "prompt": "A test fails: `assert items[0:len(items)-1] == items` for a list of 3 items. Answer in ONE sentence that contains the word 'off-by-one' and the exact slice `items[0:len(items)]`. No code fences.",
+      "check": {"kind": "contains_all", "needles": ["off-by-one", "items[0:len(items)]"], "forbid": ["```"]},
+      "max_tokens": 120
+    },
+    {
+      "id": "json-schema-answer",
+      "title": "Answer with a strict JSON object",
+      "prompt": "Reply with a single JSON object with keys: \"tests\": integer, \"failures\": integer, \"first_failure\": string. The test run had 42 tests, 3 failures, the first failure is named \"test_paginate_last_page\". No prose outside the JSON.",
+      "check": {"kind": "json_schema", "schema": {"tests": "int", "failures": "int", "first_failure": "str"}, "equals": {"tests": 42, "failures": 3, "first_failure": "test_paginate_last_page"}},
+      "max_tokens": 120
+    },
+    {
+      "id": "refactor-loop",
+      "title": "Refactor an index loop",
+      "prompt": "Rewrite `for i in range(len(rows)): process(rows[i])` using enumerate, returning ONLY the new line. No fences.",
+      "check": {"kind": "regex", "pattern": "^\\s*for\\s+[a-z_]+\\s*,\\s*[a-z_]+\\s+in\\s+enumerate\\(rows\\):", "flags": ["IGNORECASE", "MULTILINE"], "forbid": ["```"]},
+      "max_tokens": 80
+    },
+    {
+      "id": "grep-error-cause",
+      "title": "Pick the cause from a traceback",
+      "prompt": "Traceback: `KeyError: 'model_id'` raised inside `build_request(payload)` at `payload['model_id']`. Answer with ONE of: MISSING_FIELD, WRONG_TYPE, DNS_FAILURE. Answer with the label only.",
+      "check": {"kind": "one_of", "allowed": ["MISSING_FIELD"], "max_length": 40},
+      "max_tokens": 20
+    },
+    {
+      "id": "sql-select",
+      "title": "Write a SELECT",
+      "prompt": "Write ONE SQL statement that returns the newest 5 rows of table `instances` by column `created_at`. Answer with the statement only, no semicolon, no fences.",
+      "check": {"kind": "regex", "pattern": "^\\s*SELECT\\b.*\\bFROM\\s+instances\\b.*ORDER\\s+BY\\s+created_at\\s+DESC\\b.*LIMIT\\s+5\\s*$", "flags": ["IGNORECASE", "DOTALL"], "forbid": ["```", ";"]},
+      "max_tokens": 80
+    },
+    {
+      "id": "unit-test-name",
+      "title": "Name a regression test",
+      "prompt": "The bug: a worker re-registering from a new hostname raised IntegrityError. Reply with ONE pytest test name in snake_case starting with `test_` that contains both words `register` and `hostname`. No fences.",
+      "check": {"kind": "regex", "pattern": "^\\s*test_[a-z0-9_]*register[a-z0-9_]*hostname[a-z0-9_]*\\s*$", "flags": ["IGNORECASE", "MULTILINE"], "forbid": ["```"]},
+      "max_tokens": 60
+    },
+    {
+      "id": "explain-metric",
+      "title": "Explain a metric to an operator",
+      "prompt": "In TWO sentences, explain what `inferna_prefix_cache_hit_ratio` below 0.5 means for an agentic workload. Both sentences must mention 'prefix'.",
+      "check": {"kind": "regex", "pattern": "(?s)^(?=(?:[^.]*\\.){2}[^.]*$).*prefix.*prefix", "flags": ["IGNORECASE"]},
+      "max_tokens": 200
+    },
+    {
+      "id": "fix-import-order",
+      "title": "Fix an import style issue",
+      "prompt": "Given `import os, sys` as the first line, return ONLY the sorted form with one module per line, no fences.",
+      "check": {"kind": "equals_normalized", "expected": "import os\nimport sys"},
+      "max_tokens": 60
+    },
+    {
+      "id": "commit-message",
+      "title": "Write a conventional commit subject",
+      "prompt": "Write ONE conventional-commit subject (max 72 chars) for a change that stops the gateway routing traffic to a follower replica. It must start with `fix:` and contain `rank`.",
+      "check": {"kind": "regex", "pattern": "^fix: .*rank.*$", "flags": ["IGNORECASE", "MULTILINE"], "max_length": 72},
+      "max_tokens": 60
+    },
+    {
+      "id": "pytest-fix-fastapi",
+      "title": "Fix a failing pytest (code execution, opt-in)",
+      "prompt": "Return ONLY Python source for the function `def fix(app):` that makes this test pass:\n\n    from fastapi import FastAPI\n    from fastapi.testclient import TestClient\n\n    def test_health(app):\n        app = fix(app)\n        assert TestClient(app).get('/healthz').json() == {'ok': True}\n\nNo fences, no prose.",
+      "check": {
+        "kind": "pytest",
+        "test_source": "from fastapi.testclient import TestClient\nfrom solution import fix\n\ndef test_health():\n    from fastapi import FastAPI\n    app = fix(FastAPI())\n    assert TestClient(app).get('/healthz').json() == {'ok': True}\n",
+        "requires_fastapi": true
+      },
+      "max_tokens": 400,
+      "requires_code_execution": true
+    },
+    {
+      "id": "pytest-fix-off-by-one",
+      "title": "Fix a failing pytest (code execution, opt-in)",
+      "prompt": "Return ONLY Python source for the function `def last_page(items, size):` that returns the items of the last page (a page holds `size` items; the last page may be shorter; an empty list returns an empty list). No fences, no prose.",
+      "check": {
+        "kind": "pytest",
+        "test_source": "from solution import last_page\n\ndef test_last_page():\n    assert last_page([1, 2, 3, 4], 3) == [4]\n    assert last_page([1, 2, 3], 3) == [1, 2, 3]\n    assert last_page([], 3) == []\n    assert last_page([1], 2) == [1]\n"
+      },
+      "max_tokens": 400,
+      "requires_code_execution": true
+    }
+  ]
+}

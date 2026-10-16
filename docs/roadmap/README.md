@@ -130,11 +130,14 @@ stopped → deleted`. Текущий smoke только открывает и з
 | 4. Deployments и реплики | доставлено (Release A) | `server/tests/test_deployments_api.py` |
 | 5. Usage и quotas | доставлено | `docs/roadmap/plans/evidence-p05-usage-metering.md` |
 | 6. Autoscaling | не начато | план: `docs/roadmap/plans/plan-02-release-b-autoscaling.md` |
-| 7. Distributed inference | в работе: M0–M3 доставлено, M4/M5 дальше | `docs/roadmap/plans/evidence-*.md`, `docs/multinode-parity.md` |
+| 7. Distributed inference | в работе: M0–M6 доставлено (железные гейты — BLOCKED) | `docs/roadmap/plans/evidence-*.md`, `docs/multinode-parity.md` |
 
 По направлению 7 закрыты: M0 (гигиена репозитория), M1 (харнесс замеров и телеметрия gateway:
 TTFT/ITL/TPS в `/metrics`), M2.1 (замороженный контракт `proto`+схема), M2.2 (сервер размещает
 параллельную группу, воркер её исполняет; mock-lifecycle deploy → running → stop → delete проверен
-живьём), M3 (порты/топология/netem — `docs/network-matrix.md`). Железные гейты (M2-железо, M4, M6,
+живьём), M3 (порты/топология/netem — `docs/network-matrix.md`), M4 (одна команда воспроизводит
+вердикт паритета — `docs/multinode-parity.md`), M5 (маршрутизация по префикс-кэшу с метрикой
+`inferna_prefix_cache_hit_ratio`), M6 (детерминированный набор задач кодинга и CI-проверка харнесса —
+`docs/coding-validation.md`). Железные гейты (M2-железо, M4, M6,
 M9) помечены в evidence как `BLOCKED: no GPU hosts` и закрываются на первом реальном стенде.
 
