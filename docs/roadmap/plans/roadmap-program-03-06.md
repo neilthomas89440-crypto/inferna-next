@@ -120,6 +120,13 @@ graph LR
 - `services/scheduler.py`: `w2/server-parallel-groups` единолично; autoscaling и `w4` его не трогают
   (используют публичные функции).
 
+### 4.2.1 Перед каждым коммитом — проверить ветку
+
+`git branch --show-current` перед `git commit`: фоновые job'ы (`--watch` + merge) могут переключить
+рабочее дерево на `main`, и коммит уезжает не в ту ветку (за сессию это случилось трижды, каждый раз
+лечилось `git branch -f <ветка> <commit>` + `reset --hard origin/main`). Ветку создавать явно **до**
+правок (`git switch -c <ветка> main`), а не «на текущей».
+
 ### 4.3 Общие барьеры (для всех планов)
 
 - Новые env-переменные: префикс `INFERNA_`, задокументировать в `.env.example` и обоих
@@ -180,3 +187,32 @@ M9. Если хостов нет — в evidence плана пишется `BLOC
 4. M9: тег `v1.0`, TLS/mTLS на gRPC, версионирование + проверка совместимости при `Register`,
    `docs/engine-matrix.md` и `docs/phase0-validation.md` заполнены по hardware-smoke,
    upgrade-from-previous-release проходит.
+
+## 8. Фактическое исполнение (обновлено 16 октября 2026)
+
+| Волна | PR | Что влито | Evidence |
+|---|---|---|---|
+| 0 | #4, #5 | гигиена репо, доки роадмапа, планы в репо, презентация GitHub | §4.1 |
+| A | #22, #24, #25 (+#26) | 04 логи инстансов, 03 custom models, 05 usage + квоты | `evidence-p04-*`, `evidence-p03-*`, `evidence-p05-*` |
+| B | #27, #28 | bench-харнесс и телеметрия gateway (TTFT/ITL/TPS + Grafana) | `docs/multinode-bench.md`, `evidence-06-m1-telemetry.md` |
+| C | #30, #31, #32, #33 | контракт `w0`, серверные группы, worker runtime, сеть/порты | `evidence-w0-*`, `evidence-w2-server-*`, `evidence-w2-worker-*`, `docs/network-matrix.md` |
+| D | #34, #35 | вердикт паритета, маршрутизация по префикс-кэшу | `docs/multinode-parity.md`, `evidence-w2-cache-aware-routing.md` |
+| E | #36 | кодинг-валидация (12 задач, opt-in pytest, CI-харнесс) | `docs/coding-validation.md` |
+| F | #37, #38, #39 | диагностика рангов (`?live=true`), UI параллельных групп, fault-матрица + soak | `evidence-w4-diagnostics.md`, `evidence-w3-frontend-parallel.md`, `docs/fault-matrix.md` |
+| G | #40, #42 | autoscaling (окно + политика + целые группы), usage-reconcile как CI-гейт | `evidence-p02b-autoscaling.md`, `evidence-p05-*` (§M8) |
+| H | #41 | gRPC TLS/mTLS, тесты версионного гейта, `CHANGELOG.md` | `evidence-w5-release-hardening.md` |
+
+Отличия от исходной раскладки §1: autoscaling (`plan-02`) исполнен в волне G, а не E — политике нужны
+измерения M1 и целые группы из M2.2; M5 переехал в волну D (после M4), M6 — в E, `w4/diagnostics` —
+в F. Порядок «независимые направления первыми» (04 → 03 → 05) соблюдён, как и правило одного писателя
+на файл.
+
+Отклонения, зафиксированные явно (каждое с обоснованием в своём evidence): нет `rpc GetLogs`
+(server→worker) — противоречит pull-модели и порт-матрице; autoscaling читает TTFT/очередь вместо
+proxy-метрик; throughput не публикуется для coalesced-стримов; `/readyz` уже покрывал БД/миграции/gRPC
+и не переписывался.
+
+Осталось до 1.0 (всё — железо, не код): engine-matrix и phase0-validation по `hardware-smoke.sh`,
+прогоны parity/coding на железе, 24-часовой soak с инъекцией сбоев (`--docker`), затем bump версий,
+`PREVIOUS_RELEASE_HEAD` и тег `v1.0`. Команды — `docs/multinode-parity.md`,
+`docs/coding-validation.md`, `docs/fault-matrix.md` §Status.
